@@ -1,0 +1,499 @@
+diff --git a/node_modules/react-native-zcash/ios/RNZcash.m b/node_modules/react-native-zcash/ios/RNZcash.m
+index b8345ef..81b2a0b 100644
+--- a/node_modules/react-native-zcash/ios/RNZcash.m
++++ b/node_modules/react-native-zcash/ios/RNZcash.m
+@@ -77,6 +77,47 @@ resolver:(RCTPromiseResolveBlock)resolve
+ rejecter:(RCTPromiseRejectBlock)reject
+ )
+ 
++RCT_EXTERN_METHOD(deriveRotatingAddress:(NSString *)alias
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(addressUsage:(NSString *)alias
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(setTor:(NSString *)alias
++:(BOOL)enabled
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(usdRate:(NSString *)alias
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(wipeWallet:(NSString *)alias
++:(NSString *)networkName
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(isOnline:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(canReachLocal:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(walletFilesExist:(NSString *)alias
++:(NSString *)networkName
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
+ RCT_EXTERN_METHOD(deriveUnifiedAddress:(NSString *)alias
+ resolver:(RCTPromiseResolveBlock)resolve
+ rejecter:(RCTPromiseRejectBlock)reject
+diff --git a/node_modules/react-native-zcash/ios/RNZcash.swift b/node_modules/react-native-zcash/ios/RNZcash.swift
+index 825c463..b9ffacd 100644
+--- a/node_modules/react-native-zcash/ios/RNZcash.swift
++++ b/node_modules/react-native-zcash/ios/RNZcash.swift
+@@ -1,6 +1,7 @@
+ import Combine
+ import Foundation
+ import MnemonicSwift
++import Network
+ import SwiftProtobuf
+ import os
+ 
+@@ -23,6 +24,46 @@ actor SynchronizerStore {
+ 
+ let synchronizerStore = SynchronizerStore()
+ 
++/// Zecky addition: whether the phone has a network path at all, from iOS's
++/// own monitor. Nothing is sent anywhere to find out. nil until iOS has
++/// reported once.
++final class NetworkWatch {
++  static let shared = NetworkWatch()
++  private let monitor = NWPathMonitor()
++  private let lock = NSLock()
++  private var satisfied: Bool?
++  // Whether the phone is on Wi-Fi or a cable. On mobile data a home node is
++  // only reachable through a VPN such as Tailscale, which iOS does not report
++  // reliably, so the app then asks the node itself.
++  private var local: Bool?
++
++  private init() {
++    monitor.pathUpdateHandler = { [weak self] path in
++      guard let self else { return }
++      let up = path.status == .satisfied
++      self.lock.lock()
++      self.satisfied = up
++      self.local =
++        up
++        && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
++      self.lock.unlock()
++    }
++    monitor.start(queue: DispatchQueue(label: "app.zecky.network"))
++  }
++
++  var online: Bool? {
++    lock.lock()
++    defer { lock.unlock() }
++    return satisfied
++  }
++
++  var localReachable: Bool? {
++    lock.lock()
++    defer { lock.unlock() }
++    return local
++  }
++}
++
+ struct ConfirmedTx {
+   var minedHeight: Int
+   var toAddress: String?
+@@ -34,6 +75,7 @@ struct ConfirmedTx {
+   var isShielding: Bool
+   var isExpired: Bool
+   var memos: [String]?
++  var expiryHeight: Int? = nil
+   var dictionary: [String: Any?] {
+     return [
+       "minedHeight": minedHeight,
+@@ -46,6 +88,7 @@ struct ConfirmedTx {
+       "memos": memos ?? [],
+       "isShielding": isShielding,
+       "isExpired": isExpired,
++      "expiryHeight": expiryHeight,
+     ]
+   }
+   var nsDictionary: NSDictionary {
+@@ -96,7 +139,7 @@ class RNZcash: RCTEventEmitter {
+   ) {
+     Task {
+       let network = getNetworkParams(networkName)
+-      let endpoint = LightWalletEndpoint(address: defaultHost, port: defaultPort, secure: true)
++      let endpoint = LightWalletEndpoint(address: defaultHost, port: defaultPort, secure: !isPrivateNodeHost(defaultHost))
+       let initializer = Initializer(
+         cacheDbURL: try! cacheDbURLHelper(alias, network),
+         fsBlockDbRoot: try! fsBlockDbRootURLHelper(alias, network),
+@@ -128,8 +171,18 @@ class RNZcash: RCTEventEmitter {
+             keySource: nil
+           )
+           try await wallet.synchronizer.start()
++          // Zecky addition: keep the wallet database out of iCloud and
++          // computer backups.
++          excludeFromBackup(walletFileURLs(alias, network))
+           let accounts = try await wallet.synchronizer.listAccounts()
+           let accountUUID = accounts.first(where: { $0.ufvk == ufvk })?.id
++          // Zecky addition: the database on this device belongs to a
++          // different recovery phrase. Refuse rather than show its history.
++          guard accountUUID != nil else {
++            wallet.synchronizer.stop()
++            reject("WalletMismatch", "Wallet data belongs to another wallet", genericError)
++            return
++          }
+           wallet.accountUUID = accountUUID
+           wallet.subscribe()
+           await synchronizerStore.set(wallet, for: alias)
+@@ -185,7 +238,7 @@ class RNZcash: RCTEventEmitter {
+   ) {
+     Task {
+       do {
+-        let endpoint = LightWalletEndpoint(address: host, port: port, secure: true)
++        let endpoint = LightWalletEndpoint(address: host, port: port, secure: !isPrivateNodeHost(host))
+         let lightwalletd: LightWalletService = LightWalletGRPCService(endpoint: endpoint)
+         let height = try await lightwalletd.latestBlockHeight(mode: ServiceMode.direct)
+         await lightwalletd.closeConnections()
+@@ -301,21 +354,35 @@ class RNZcash: RCTEventEmitter {
+           )
+ 
+           var lastTxid = ""  // The last transfer is the most relevant to the user
++          // Zecky: once created, a transaction is stored in the wallet and the
++          // SDK retries delivery every few minutes until it is mined or
++          // expires. A failed delivery therefore does not mean "nothing was
++          // sent", so it is reported with its own code and the txid.
++          var undelivered: [String] = []
++          var rejected: String?
+           for try await tx in transactions {
+             switch tx {
+-            case .grpcFailure(_, let error):
+-              throw error
++            case .grpcFailure(let txId, _):
++              undelivered.append(txId.toHexStringTxId())
+             case .success(let txId):
+               lastTxid = txId.toHexStringTxId()
+               continue
+-            case .submitFailure(txId: _, let code, let description):
+-              throw NSError(
+-                domain:
+-                  "transaction failed to submit with code: \(code) - description: \(description)",
+-                code: 0)
+-            case .notAttempted(_):
+-              throw NSError(domain: "transaction not attempted", code: 0)
++            case .submitFailure(let txId, let code, let description):
++              undelivered.append(txId.toHexStringTxId())
++              rejected = "code \(code): \(description)"
++            case .notAttempted(let txId):
++              undelivered.append(txId.toHexStringTxId())
++            }
++          }
++
++          if !undelivered.isEmpty {
++            let ids = undelivered.joined(separator: ",")
++            if let rejected {
++              reject("SubmitRejected", "txids:\(ids) \(rejected)", genericError)
++            } else {
++              reject("SubmitPending", "txids:\(ids)", genericError)
+             }
++            return
+           }
+ 
+           resolve(lastTxid)
+@@ -631,6 +698,214 @@ class RNZcash: RCTEventEmitter {
+     }
+   }
+ 
++  /// Zecky addition: a fresh shielded-only unified address on every call.
++  /// All of them belong to the same account, so funds sent to any of them
++  /// show up in the same balance.
++  @objc func deriveRotatingAddress(
++    _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      if let wallet = await synchronizerStore.get(alias) {
++        do {
++          guard let accountUUID = wallet.accountUUID else {
++            reject("deriveRotatingAddress", "Account UUID not found", genericError)
++            return
++          }
++          let receivers: Set<ReceiverType> = [.sapling, .orchard]
++          let address = try await wallet.synchronizer.getCustomUnifiedAddress(
++            accountUUID: accountUUID, receivers: receivers)
++          resolve(address.stringEncoded)
++        } catch {
++          reject("deriveRotatingAddress", "Failed to derive a new address", error)
++        }
++      } else {
++        reject("deriveRotatingAddress", "Wallet does not exist", genericError)
++      }
++    }
++  }
++
++  /// Zecky addition: how many incoming payments each of the wallet's own
++  /// addresses has received, as { address: count }.
++  @objc func addressUsage(
++    _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      if let wallet = await synchronizerStore.get(alias) {
++        do {
++          let txs = try await wallet.synchronizer.allTransactions()
++          var counts: [String: Int] = [:]
++          for tx in txs where !tx.isSentTransaction {
++            let outputs = await wallet.synchronizer.getTransactionOutputs(for: tx)
++            var paidTo = Set<String>()
++            for output in outputs where !output.isChange {
++              if case .address(let recipient) = output.recipient {
++                paidTo.insert(recipient.stringEncoded)
++              }
++            }
++            for address in paidTo {
++              counts[address, default: 0] += 1
++            }
++          }
++          resolve(counts as NSDictionary)
++        } catch {
++          reject("addressUsage", "Failed to read address usage", error)
++        }
++      } else {
++        reject("addressUsage", "Wallet does not exist", genericError)
++      }
++    }
++  }
++
++  /// Zecky addition: route the privacy-sensitive calls (sending, looking
++  /// up the wallet's own transactions, chain-height checks) through Tor.
++  /// If Tor cannot start this rejects and the wallet stays on a direct
++  /// connection.
++  @objc func setTor(
++    _ alias: String, _ enabled: Bool,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      if let wallet = await synchronizerStore.get(alias) {
++        do {
++          try await wallet.synchronizer.tor(enabled: enabled)
++          resolve(nil)
++        } catch {
++          reject("setTor", "Failed to change the Tor setting", error)
++        }
++      } else {
++        reject("setTor", "Wallet does not exist", genericError)
++      }
++    }
++  }
++
++  /// Zecky addition: the ZEC price in USD, fetched by the SDK over Tor so
++  /// the price source never sees the phone's internet address.
++  @objc func usdRate(
++    _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      if let wallet = await synchronizerStore.get(alias) {
++        do {
++          let synchronizer = wallet.synchronizer
++          try await synchronizer.exchangeRateOverTor(enabled: true)
++          synchronizer.refreshExchangeRateUSD()
++
++          let rate: Double? = await withTaskGroup(of: Double?.self) { group in
++            group.addTask {
++              var emptyResults = 0
++              for await result in synchronizer.exchangeRateUSDStream.values {
++                guard let result = result else {
++                  // The first empty value is the stream's starting state;
++                  // a second one means the fetch failed with nothing cached.
++                  emptyResults += 1
++                  if emptyResults >= 2 { return nil }
++                  continue
++                }
++                if result.state == .error { return nil }
++                if result.state == .success && result.date.timeIntervalSinceNow > -600 {
++                  return result.rate.doubleValue
++                }
++              }
++              return nil
++            }
++            group.addTask {
++              try? await Task.sleep(nanoseconds: 60_000_000_000)
++              return nil
++            }
++            let first: Double? = await group.next() ?? nil
++            group.cancelAll()
++            return first
++          }
++
++          if let rate = rate {
++            resolve(rate)
++          } else {
++            reject("usdRate", "Could not fetch the exchange rate", genericError)
++          }
++        } catch {
++          reject("usdRate", "Could not fetch the exchange rate", error)
++        }
++      } else {
++        reject("usdRate", "Wallet does not exist", genericError)
++      }
++    }
++  }
++
++  /// Zecky addition: stops the wallet and deletes everything it stored on
++  /// this device (database, block cache, Tor state). The recovery phrase is
++  /// kept elsewhere and is removed by the app itself.
++  @objc func wipeWallet(
++    _ alias: String, _ networkName: String,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      let network = getNetworkParams(networkName)
++      if let wallet = await synchronizerStore.get(alias) {
++        // The SDK's own wipe stops syncing, closes every database
++        // connection and removes the data. Deleting files under a wallet
++        // that is still open leaves the old data in use.
++        do {
++          for try await _ in wallet.synchronizer.wipe().values {}
++        } catch {
++          wallet.synchronizer.stop()
++          try? await Task.sleep(nanoseconds: 1_000_000_000)
++        }
++        wallet.cancellables.forEach { $0.cancel() }
++        await synchronizerStore.remove(alias)
++      }
++      for url in walletFileURLs(alias, network) {
++        try? FileManager.default.removeItem(at: url)
++      }
++      // Never report success while wallet data is still on the device.
++      let left = walletFileURLs(alias, network).filter {
++        FileManager.default.fileExists(atPath: $0.path)
++      }
++      if left.isEmpty {
++        resolve(nil)
++      } else {
++        reject("WipeError", "Wallet data could not be removed", genericError)
++      }
++    }
++  }
++
++  /// Zecky addition: true when iOS reports a network path, false when it
++  /// reports none, and true while it has not reported yet.
++  @objc func isOnline(
++    _ resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    resolve(NetworkWatch.shared.online ?? true)
++  }
++
++  /// Zecky addition: whether the phone is on Wi-Fi or a cable. true while
++  /// iOS has not reported yet.
++  @objc func canReachLocal(
++    _ resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    resolve(NetworkWatch.shared.localReachable ?? true)
++  }
++
++  /// Zecky addition: whether any of this wallet's files are on the device.
++  /// They survive an app update but not deleting the app, so the app can
++  /// tell a fresh install from an update.
++  @objc func walletFilesExist(
++    _ alias: String, _ networkName: String,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    let network = getNetworkParams(networkName)
++    let found = walletFileURLs(alias, network).contains {
++      FileManager.default.fileExists(atPath: $0.path)
++    }
++    resolve(found)
++  }
++
+   @objc func deriveUnifiedAddress(
+     _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
+     rejecter reject: @escaping RCTPromiseRejectBlock
+@@ -888,6 +1163,9 @@ class WalletSynchronizer: NSObject {
+     if tx.fee != nil {
+       confTx.fee = String(describing: abs(tx.fee!.amount))
+     }
++    if let expiry = tx.expiryHeight, expiry > 0 {
++      confTx.expiryHeight = expiry
++    }
+     if tx.isSentTransaction {
+       let recipients = await self.synchronizer.getRecipients(for: tx)
+       if recipients.count > 0 {
+@@ -998,3 +1276,64 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
+       isDirectory: true
+     )
+ }
++
++/// Zecky addition: every file and folder the wallet keeps in Documents.
++///
++/// The SDK stores a wallet with a custom alias under prefixed names
++/// ("c_<alias>_data.db", see URL+UpdateWithAlias.swift), so the SDK's own
++/// renaming rule is applied here. The plain names are listed as well, which
++/// costs nothing and covers files from before the SDK used aliases.
++func walletFileURLs(_ alias: String, _ network: ZcashNetwork) -> [URL] {
++  var plain: [URL] = []
++  if let dataDb = try? dataDbURLHelper(alias, network) { plain.append(dataDb) }
++  if let cacheDb = try? cacheDbURLHelper(alias, network) { plain.append(cacheDb) }
++  if let blocks = try? fsBlockDbRootURLHelper(alias, network) { plain.append(blocks) }
++  if let general = try? generalStorageURLHelper(alias, network) { plain.append(general) }
++  if let tor = try? torDirURLHelper(alias, network) { plain.append(tor) }
++
++  let sdkAlias = ZcashSynchronizerAlias.custom(alias)
++  var urls: [URL] = []
++  for url in plain {
++    for candidate in [url.updateLastPathComponent(with: sdkAlias), url] {
++      guard let candidate else { continue }
++      urls.append(candidate)
++      if candidate.pathExtension == "db" {
++        // SQLite keeps recent changes in these side files.
++        urls.append(URL(fileURLWithPath: candidate.path + "-wal"))
++        urls.append(URL(fileURLWithPath: candidate.path + "-shm"))
++      }
++    }
++  }
++  return urls
++}
++
++/// Zecky addition: marks existing files and folders as not to be backed up.
++func excludeFromBackup(_ urls: [URL]) {
++  for url in urls where FileManager.default.fileExists(atPath: url.path) {
++    var target = url
++    var values = URLResourceValues()
++    values.isExcludedFromBackup = true
++    try? target.setResourceValues(values)
++  }
++}
++
++// Zecky: a home node (Rock it) on a private network is reached without TLS.
++// Only private IPv4 ranges qualify: the home network (10/8, 172.16/12,
++// 192.168/16), this device (127/8) and Tailscale (100.64/10), whose traffic is
++// already encrypted. Every other host, including all public servers, keeps TLS.
++private func isPrivateNodeHost(_ host: String) -> Bool {
++  // Exactly four groups of ASCII digits, like the app's isHomeNode: a name
++  // such as "10.0.0.1.example.com" is a normal internet host and keeps TLS.
++  let groups = host.split(separator: ".", omittingEmptySubsequences: false)
++  guard groups.count == 4,
++        groups.allSatisfy({ !$0.isEmpty && $0.count <= 3 && $0.allSatisfy({ $0.isASCII && $0.isNumber }) })
++  else { return false }
++  let parts = groups.compactMap { Int($0) }
++  guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
++  switch (parts[0], parts[1]) {
++  case (10, _), (127, _), (192, 168): return true
++  case (172, 16...31): return true
++  case (100, 64...127): return true
++  default: return false
++  }
++}
