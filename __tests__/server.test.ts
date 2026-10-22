@@ -86,3 +86,11 @@ test('reads saved servers and drops malformed ones', () => {
   expect(parseSavedServers('not json')).toEqual([]);
   expect(parseSavedServers(undefined)).toEqual([]);
 });
+
+test('reads the Rock it wallet server QR (Tailscale HTTPS address)', () => {
+  expect(parseServer('https://rockit.tail1234.ts.net:9067')).toEqual({
+    host: 'rockit.tail1234.ts.net',
+    port: 9067,
+  });
+  expect(parseServer('zcash:u1abc')).toBeNull();
+});

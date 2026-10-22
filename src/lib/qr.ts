@@ -13,8 +13,12 @@ export interface QrMatrix {
   rows: QrRun[][];
 }
 
-export function makeQrMatrix(text: string): QrMatrix {
-  const qr = qrcode(0, 'M');
+/**
+ * 'H' recovers up to 30% of the code, enough to cover the middle with a
+ * small badge and still scan.
+ */
+export function makeQrMatrix(text: string, level: 'M' | 'H' = 'M'): QrMatrix {
+  const qr = qrcode(0, level);
   qr.addData(text);
   qr.make();
   const size = qr.getModuleCount();

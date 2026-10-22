@@ -1,10 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Button } from '../components/Button';
+import {
+  Animated,
+  AppState,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { Confirming } from '../components/Confirming';
 import { Icon } from '../components/Icon';
 import { Toast, ToastMessage } from '../components/Toast';
-import { TransactionRow } from '../components/TransactionRow';
+import {
+  BrassButton,
+  Medallion,
+  LockInPrompt,
+  MilestoneRing,
+  OpenLockPrompt,
+  ZeckyLock,
+} from '../components/lock';
 import type { Currency } from '../config';
 import { formatFiat, usePrices } from '../lib/price';
 import {
@@ -17,6 +30,14 @@ import {
 } from '../lib/settings';
 import { isHomeNode, useServer } from '../lib/server';
 import { txKind } from '../lib/transactions';
+import { daysSince, lockedSince } from '../lib/lockedSince';
+import { nextMilestone } from '../lib/milestones';
+import { slowestWaiting, waitingText } from '../lib/confirmations';
+import { confirmOwner } from '../lib/deviceAuth';
+import { usePinEnabled } from '../lib/pin';
+import { useOpenWait } from '../lib/openWait';
+import { asksAt, useAskWhen } from '../lib/askWhen';
+import { tapLockStep } from '../lib/lockRules';
 import { useHomeNodeReachable, useNetwork } from '../lib/network';
 import { useTorWanted } from '../lib/tor';
 import {
@@ -61,12 +82,9 @@ const TOR_LABELS = {
   unavailable: 'not available',
 } as const;
 
-/** How many payments the main screen shows before "See all". */
-const RECENT_COUNT = 3;
-
 /**
- * The line above the balance. On your own node (Rock it) it says so, while
- * syncing and once synced.
+ * The status line at the bottom. On your own node (Rock it) it says so,
+ * while syncing and once synced.
  */
 function statusLine(
   status: SyncStatus,
@@ -79,7 +97,7 @@ function statusLine(
     case 'SYNCING':
       return `Syncing ${Math.floor(progress)}%${rockIt ? ' · Rock it' : ''}`;
     case 'SYNCED':
-      return rockIt ? 'Zecky Lock it (Rock it)' : 'Zecky Lock it';
+      return rockIt ? 'Up to date · Rock it' : 'Up to date';
     case 'DISCONNECTED':
       return rockIt ? 'Rock it not reachable' : 'Offline';
     case 'STOPPED':
@@ -97,8 +115,19 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const nodeReachable = useHomeNodeReachable(server, rockIt, network);
   // Offline, or Rock it on mobile data without an answer from the node.
   const cutOff = !network.online || (rockIt && !nodeReachable);
-  const synced = state.status === 'SYNCED' && !cutOff;
+  // The engine stops updating its status after the first full sync, but
+  // keeps reporting progress. Progress below 100% means it is catching up
+  // again (for example after a long time in the background).
+  // The same goes for the start: the engine can report progress before
+  // its first status, for example while a restored wallet scans its past.
+  const catchingUp =
+    (state.status === 'SYNCED' || state.status === 'STARTING') &&
+    state.scanProgress > 0 &&
+    state.scanProgress < 100;
+  const shownStatus = catchingUp ? 'SYNCING' : state.status;
+  const synced = shownStatus === 'SYNCED' && !cutOff;
   const confirming = confirmingZatoshi(state);
+  const waiting = slowestWaiting(state.transactions, state.networkHeight);
   const [receiving, setReceiving] = useState(false);
   const [sending, setSending] = useState(false);
   const [unit, setUnit] = useState<Unit>(loadUnit);
@@ -136,7 +165,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     saveUnit(next);
   };
 
-  // --- "Payment received" and "Payment sent" messages ---
+  // --- "Locked in" and "Released" messages ---
   // Payments already in the wallet when it finishes syncing are history,
   // not news: only what arrives after that gets a message.
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -151,31 +180,82 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const amountRef = useRef(amountText);
   amountRef.current = amountText;
 
+  // Zcash that arrives on the public address is not locked in yet. The
+  // engine does not say which address a payment came in on, so a rise of
+  // the public balance at the same moment marks it as arrived outside.
+  const transparentRef = useRef(BigInt(state.transparentZatoshi));
+  const outsideGain = useRef(0n);
+  useEffect(() => {
+    const now = BigInt(state.transparentZatoshi);
+    if (now > transparentRef.current) {
+      outsideGain.current += now - transparentRef.current;
+    }
+    transparentRef.current = now;
+  }, [state.transparentZatoshi]);
+
+  // A shielding ("lock it in") is news twice: when it starts, and when it
+  // is in a block.
+  const shieldingWaiting = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     const fresh = state.transactions.filter(
       tx => !known.current.has(tx.rawTransactionId),
     );
     fresh.forEach(tx => known.current.add(tx.rawTransactionId));
+    // Shieldings that were waiting and are now in a block.
+    const lockedIn = state.transactions.filter(
+      tx =>
+        tx.isShielding &&
+        tx.minedHeight > 0 &&
+        shieldingWaiting.current.has(tx.rawTransactionId),
+    );
+    lockedIn.forEach(tx =>
+      shieldingWaiting.current.delete(tx.rawTransactionId),
+    );
+    state.transactions
+      .filter(tx => tx.isShielding && tx.minedHeight <= 0 && !tx.isExpired)
+      .forEach(tx => shieldingWaiting.current.add(tx.rawTransactionId));
     if (!caughtUp.current) {
       if (synced) caughtUp.current = true;
       return;
     }
-    const news = fresh
-      .filter(
-        tx =>
-          txKind(tx) === 'received' &&
-          !tx.isExpired &&
-          !announced.current.has(tx.rawTransactionId),
-      )
-      .map(tx => ({
-        key: tx.rawTransactionId,
-        txId: tx.rawTransactionId,
-        kind: 'received' as const,
-        title: 'Payment received',
-        detail: amountRef.current(tx.value),
-      }));
-    news.forEach(n => announced.current.add(n.txId));
-    if (news.length > 0) setQueued(q => [...q, ...news]);
+    const received = fresh.filter(
+      tx =>
+        txKind(tx) === 'received' &&
+        !tx.isExpired &&
+        !announced.current.has(tx.rawTransactionId),
+    );
+    received.forEach(tx => announced.current.add(tx.rawTransactionId));
+    const done = lockedIn.map(tx => ({
+      key: `${tx.rawTransactionId}-in`,
+      txId: tx.rawTransactionId,
+      kind: 'received' as const,
+      title: 'Locked in ✓',
+      detail: 'Your public Zcash is private now',
+    }));
+    if (done.length > 0) setQueued(q => [...q, ...done]);
+    if (received.length === 0) return;
+    // Give the balance a moment to arrive, then decide inside or outside.
+    setTimeout(() => {
+      const news = received.map(tx => {
+        const value = BigInt(tx.value || '0');
+        const outsideLock = outsideGain.current >= value && value > 0n;
+        if (outsideLock) outsideGain.current -= value;
+        return {
+          key: tx.rawTransactionId,
+          txId: tx.rawTransactionId,
+          kind: 'received' as const,
+          title: outsideLock ? 'Arrived outside the lock' : 'Locked in',
+          detail: outsideLock
+            ? `${amountRef.current(tx.value)} · tap Lock it in on Home`
+            : amountRef.current(tx.value),
+        };
+      });
+      setQueued(q => [...q, ...news]);
+    }, 2000);
+    // Not cancelled on the next update: these payments are already marked
+    // as announced, so their message must still go out.
+    return undefined;
   }, [state.transactions, synced]);
 
   const announceSent = (txId: string, zatoshi: string) => {
@@ -187,7 +267,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         key: txId,
         txId,
         kind: 'sent',
-        title: 'Payment sent',
+        title: 'Released',
         detail: amountRef.current(zatoshi),
       },
     ]);
@@ -222,17 +302,46 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     saveHidden(!hidden);
   };
 
+  // Zcash on the public address is not locked yet: one quiet line on
+  // Home, and a card that locks it in (shields it).
+  const [lockInOpen, setLockInOpen] = useState(false);
   const [shielding, setShielding] = useState(false);
+  const [shieldStarted, setShieldStarted] = useState(false);
   const [shieldNote, setShieldNote] = useState<string | null>(null);
+  const outside = BigInt(state.transparentZatoshi) > 0n;
+  // A lock-in (shielding) that is not in a block yet.
+  const lockingIn = state.transactions.some(
+    tx => tx.isShielding && tx.minedHeight <= 0 && !tx.isExpired,
+  );
+  useEffect(() => {
+    if (!outside) {
+      setShieldStarted(false);
+      setShieldNote(null);
+    }
+  }, [outside]);
   const shield = async () => {
     setShielding(true);
     setShieldNote(null);
     try {
       await state.shieldFunds();
-      setShieldNote('Shielding started. It can take a few minutes to confirm.');
+      setShieldStarted(true);
+      setShieldNote('Locking in. It can take a few minutes to confirm.');
+      setLockInOpen(false);
+      setQueued(q => [
+        ...q,
+        {
+          key: `shield-${Date.now()}`,
+          txId: '',
+          kind: 'sent',
+          title: 'Locking in…',
+          detail: 'Usually a few minutes. Home says when it is done.',
+        },
+      ]);
     } catch (e) {
       setShieldNote(
-        `Shielding failed. ${e instanceof Error ? e.message : String(e)}`,
+        `Locking in did not work. ${
+          e instanceof Error ? e.message : String(e)
+        }`,
       );
     } finally {
       setShielding(false);
@@ -245,238 +354,431 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     : formatDisplay(state.totalZatoshi, unit);
   const balanceSize =
     balanceText.length <= 8
-      ? 56
+      ? 54
       : balanceText.length <= 11
-      ? 42
+      ? 44
       : balanceText.length <= 14
       ? 34
-      : 26;
+      : 28;
 
-  const header = (
-    <View>
-      <View style={styles.statusRow}>
-        <View
-          style={[
-            styles.dot,
-            synced && styles.dotOk,
-            (cutOff || state.status === 'DISCONNECTED') && styles.dotDanger,
-          ]}
-        />
-        <Text style={styles.status}>
-          {!network.online
-            ? 'No internet connection'
-            : cutOff
-            ? 'Rock it not reachable: not on home Wi-Fi or Tailscale'
-            : statusLine(state.status, state.scanProgress, rockIt)}
-        </Text>
-        {torWanted && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Tor: ${
-              TOR_LABELS[state.tor]
-            }. Open network settings`}
-            hitSlop={12}
-            onPress={() => {
-              setSettingsStart('server');
-              setSettingsOpen(true);
-            }}
-            style={state.tor === 'starting' && styles.torStarting}
-          >
-            <Icon
-              name="onion"
-              size={20}
-              color={
-                state.tor === 'on' || state.tor === 'starting'
-                  ? colors.gold
-                  : colors.danger
-              }
-            />
-          </Pressable>
-        )}
-      </View>
+  // --- The lock, as on the Mac ---
+  // The lock takes the room that is left above the balance and buttons, so
+  // the home screen fits without scrolling on every iPhone. The screen
+  // fades in once that room is measured, so nothing jumps at startup.
+  const [area, setArea] = useState(0);
+  const below =
+    270 +
+    (confirming !== '0' ? 28 : 0) +
+    (outside || lockingIn ? 24 : 0) +
+    (phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n ? 24 : 0);
+  const heroScale =
+    area === 0 ? 1 : Math.min(1, Math.max(0.5, (area - below) / 396));
+  const fade = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (area > 0) {
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [area > 0, fade]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [asking, setAsking] = useState(false);
+  const [lockOpen, setLockOpen] = useState(false);
+  const since = lockedSince(state.transactions);
+  const heldDays = since == null ? null : daysSince(since);
+  const milestone = nextMilestone(heldDays ?? 0);
+  // The plate always shows the lock's state; the value in your currency is
+  // an estimate that moves with the price, so it sits under the balance.
+  const plateText = lockOpen ? 'OPEN' : 'LOCKED';
+  const fiatLine =
+    shownCurrency != null && price != null
+      ? hidden
+        ? '≈ ••••'
+        : `≈ ${formatFiat(state.totalZatoshi, price, shownCurrency)}`
+      : null;
+  const heldLine =
+    since == null || heldDays == null
+      ? BigInt(state.totalZatoshi) > 0n
+        ? 'Locked on this iPhone'
+        : 'Nothing locked yet. Tap Lock more to begin.'
+      : heldDays === 0
+      ? 'Locked since today'
+      : `Locked for ${heldDays} ${heldDays === 1 ? 'day' : 'days'}`;
+  // One quiet line: how long, and the next milestone the ring is filling to.
+  const milestoneText =
+    since != null && milestone != null
+      ? `${milestone.name} in ${milestone.inDays} ${
+          milestone.inDays === 1 ? 'day' : 'days'
+        }`
+      : null;
+  // Home only mentions a payment while it waits for a block; the rest of
+  // the history is in Activity.
+  const last = state.transactions.find(tx => {
+    const kind = txKind(tx);
+    return (
+      !tx.isExpired &&
+      tx.minedHeight <= 0 &&
+      (kind === 'received' || kind === 'sent')
+    );
+  });
+  const lastLine = (() => {
+    if (last == null) return null;
+    const lockedIn = txKind(last) === 'received';
+    const what = lockedIn ? 'Locking in' : 'Releasing';
+    const when =
+      last.minedHeight > 0 && last.blockTimeInSeconds > 0
+        ? new Date(last.blockTimeInSeconds * 1000).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+          })
+        : 'waiting for a block';
+    if (hidden) return `${what} · ${when}`;
+    return `${what} ${lockedIn ? '+' : '−'}${formatExact(
+      last.value,
+      unit,
+    )} · ${when}`;
+  })();
 
-      <Pressable
-        onPress={toggleUnit}
-        accessibilityRole="button"
-        accessibilityHint="Switches between ZEC and zats"
-        style={styles.balanceBlock}
-      >
-        <View style={styles.captionRow}>
-          <Text style={styles.caption}>Balance</Text>
-          <View style={styles.captionIcons}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                dark ? 'Switch to light theme' : 'Switch to dark theme'
-              }
-              hitSlop={12}
-              onPress={() => setThemeMode(dark ? 'light' : 'dark')}
-              style={styles.captionIcon}
-            >
-              <Icon name={dark ? 'sun' : 'moon'} />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={hidden ? 'Show amounts' : 'Hide amounts'}
-              hitSlop={12}
-              onPress={toggleHidden}
-            >
-              <Icon name={hidden ? 'eyeOff' : 'eye'} />
-            </Pressable>
-          </View>
-        </View>
-        {shownCurrency != null && price != null && (
-          <Text style={styles.fiat}>
-            {hidden
-              ? HIDDEN_AMOUNT
-              : formatFiat(state.totalZatoshi, price, shownCurrency)}
-          </Text>
-        )}
-        <View style={styles.balanceRow}>
-          <Text style={[styles.balance, { fontSize: balanceSize }]}>
-            {balanceText}
-          </Text>
-          <Text style={styles.unit}> {unit}</Text>
-        </View>
-        {confirming !== '0' && (
-          <Confirming
-            text={
-              hidden
-                ? 'Part of your balance is available in a few minutes'
-                : `${formatExact(confirming, unit)} available in a few minutes`
-            }
-          />
-        )}
-        {!hidden && (
-          <Text style={styles.note}>
-            Tap to show in {unit === 'ZEC' ? 'zats' : 'ZEC'}
-          </Text>
-        )}
-      </Pressable>
+  // Tapping the lock asks "Really open the lock?" first. Once the owner
+  // checks out, the lock opens on this screen and Release Zcash appears.
+  // It closes again after Send, with Close the lock, after two minutes,
+  // or when Zecky goes to the background.
+  const [openNote, setOpenNote] = useState(false);
+  useEffect(() => {
+    if (!openNote) return;
+    const t = setTimeout(() => setOpenNote(false), 4000);
+    return () => clearTimeout(t);
+  }, [openNote]);
+  const openWait = useOpenWait();
+  const pinEnabled = usePinEnabled();
+  useAskWhen();
+  const checkOnOpen = asksAt('openLock', pinEnabled);
+  const tapLock = async () => {
+    switch (
+      tapLockStep({
+        lockOpen,
+        synced,
+        wait: openWait,
+        check: checkOnOpen,
+        codeSet: pinEnabled,
+      })
+    ) {
+      case 'release':
+        setSending(true);
+        break;
+      case 'notReady':
+        setOpenNote(true);
+        break;
+      case 'openNow':
+        // Both switched off in Keys to the lock: one tap opens it.
+        setLockOpen(true);
+        break;
+      case 'deviceCheck': {
+        // The question is switched off: straight to Face ID or the passcode.
+        const result = await confirmOwner('Open the lock');
+        if (result !== 'cancelled') setLockOpen(true);
+        break;
+      }
+      case 'ask':
+        setAsking(true);
+    }
+  };
+  const openLock = () => {
+    setAsking(false);
+    setLockOpen(true);
+  };
+  const closeLock = () => {
+    setSending(false);
+    setLockOpen(false);
+  };
+  useEffect(() => {
+    if (locked) {
+      setAsking(false);
+      setLockOpen(false);
+    }
+  }, [locked]);
+  useEffect(() => {
+    if (!lockOpen) return;
+    // While Release is open the two-minute timer waits, but leaving Zecky
+    // still closes Release and the lock.
+    const t = sending ? null : setTimeout(() => setLockOpen(false), 120_000);
+    const sub = AppState.addEventListener('change', next => {
+      if (sending ? next === 'background' : next !== 'active') {
+        setSending(false);
+        setLockOpen(false);
+      }
+    });
+    return () => {
+      if (t != null) clearTimeout(t);
+      sub.remove();
+    };
+  }, [lockOpen, sending]);
 
-      {state.error != null && <Text style={styles.error}>{state.error}</Text>}
-
-      {phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n && (
-        <View style={styles.publicCard}>
-          <Text style={styles.publicTitle}>
-            Your recovery phrase isn’t confirmed yet
-          </Text>
-          <Text style={styles.note}>
-            Check your paper copy now, while you still have this phone.
-          </Text>
-          <View style={styles.publicAction}>
-            <Button
-              label="Confirm"
-              variant="quiet"
-              onPress={() => {
-                setSettingsStart('phrase');
-                setSettingsOpen(true);
-              }}
-            />
-          </View>
-        </View>
-      )}
-
-      {BigInt(state.transparentZatoshi) > 0n && (
-        <View style={styles.publicCard}>
-          <Text style={styles.publicTitle}>
-            {hidden
-              ? 'You have funds on your public address'
-              : `${formatExact(
-                  state.transparentZatoshi,
-                  unit,
-                )} on your public address`}
-          </Text>
-          <Text style={styles.note}>
-            These are visible to everyone. Shielding moves them into your
-            private balance, for a small network fee.
-          </Text>
-          {shieldNote != null && <Text style={styles.note}>{shieldNote}</Text>}
-          <View style={styles.publicAction}>
-            <Button
-              label="Shield now"
-              variant="quiet"
-              busy={shielding}
-              disabled={!synced}
-              onPress={shield}
-            />
-          </View>
-        </View>
-      )}
-
-      <View style={styles.actions}>
-        <View style={styles.action}>
-          <Button label="Receive" onPress={() => setReceiving(true)} />
-        </View>
-        <View style={styles.action}>
-          <Button
-            label="Send"
-            variant="quiet"
-            disabled={!synced}
-            onPress={() => setSending(true)}
-          />
-        </View>
-      </View>
-      {!synced && (
-        <Text style={styles.note}>
-          Sending unlocks once the wallet is up to date.
-        </Text>
-      )}
-
-      <Text style={[styles.caption, styles.historyTitle]}>Recent activity</Text>
-    </View>
-  );
+  const statusText = !network.online
+    ? 'No internet connection'
+    : cutOff
+    ? 'Rock it not reachable: not on home Wi-Fi or Tailscale'
+    : statusLine(shownStatus, state.scanProgress, rockIt);
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={state.transactions.slice(0, RECENT_COUNT)}
-        keyExtractor={tx => tx.rawTransactionId}
-        renderItem={({ item }) => (
-          <TransactionRow
-            tx={item}
-            unit={unit}
-            hidden={hidden}
-            onPress={() => setOpenTxId(item.rawTransactionId)}
-          />
+      <View style={styles.topBar}>
+        <View style={styles.wordmark}>
+          <Text style={styles.brand}>ZECKY</Text>
+          <Text style={styles.product}>Lock it</Text>
+        </View>
+        <View style={styles.topIcons}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              dark ? 'Switch to light theme' : 'Switch to dark theme'
+            }
+            hitSlop={10}
+            onPress={() => setThemeMode(dark ? 'light' : 'dark')}
+            style={styles.topIcon}
+          >
+            <Icon name={dark ? 'sun' : 'moon'} color={colors.textMuted} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={hidden ? 'Show amounts' : 'Hide amounts'}
+            hitSlop={10}
+            onPress={toggleHidden}
+            style={styles.topIcon}
+          >
+            <Icon name={hidden ? 'eyeOff' : 'eye'} color={colors.textMuted} />
+          </Pressable>
+        </View>
+      </View>
+
+      <Animated.ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        onLayout={e => setArea(e.nativeEvent.layout.height)}
+        style={{ opacity: fade }}
+      >
+        <View style={styles.spaceAbove} />
+        <View style={[styles.hero, { height: Math.round(396 * heroScale) }]}>
+          <View style={styles.heroLayer} pointerEvents="none">
+            <Medallion diameter={Math.round(700 * heroScale)} />
+          </View>
+          <View
+            style={[styles.heroLayer, since == null && styles.ringWaiting]}
+            pointerEvents="none"
+          >
+            <MilestoneRing
+              progress={milestone?.progress ?? 0}
+              diameter={Math.round(364 * heroScale)}
+            />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              lockOpen ? 'The Zecky lock, opened' : 'The Zecky lock, locked'
+            }
+            accessibilityHint={
+              lockOpen
+                ? 'Opens Release Zcash'
+                : 'Asks whether you really want to open the lock'
+            }
+            onPress={tapLock}
+            style={styles.lockButton}
+          >
+            <ZeckyLock
+              open={lockOpen}
+              size={Math.round(244 * heroScale)}
+              plateText={plateText}
+            />
+          </Pressable>
+        </View>
+        {openNote && (
+          <Text style={[styles.note, styles.center]}>
+            The lock opens once the wallet is up to date.
+          </Text>
         )}
-        ListHeaderComponent={header}
-        ListFooterComponent={
-          state.transactions.length > RECENT_COUNT ? (
+
+        <Pressable
+          onPress={() => !hidden && toggleUnit()}
+          accessibilityRole="button"
+          accessibilityHint={
+            hidden ? undefined : 'Switches between ZEC and zats'
+          }
+          style={styles.balanceRow}
+        >
+          <Text
+            style={[styles.balance, { fontSize: balanceSize }]}
+            numberOfLines={1}
+          >
+            {balanceText}
+          </Text>
+          <Text style={styles.unit}> {unit}</Text>
+        </Pressable>
+        {fiatLine != null && (
+          <Text style={[styles.fiat, styles.center]}>{fiatLine}</Text>
+        )}
+
+        <Text style={[styles.held, styles.center]}>
+          {heldLine}
+          {milestoneText != null && (
+            <Text style={styles.milestone}> · {milestoneText}</Text>
+          )}
+        </Text>
+        {(outside || lockingIn) && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint={
+              lockingIn ? 'Opens Activity' : 'Explains it and locks it in'
+            }
+            hitSlop={8}
+            onPress={() =>
+              lockingIn ? setActivityOpen(true) : setLockInOpen(true)
+            }
+            style={styles.needRow}
+          >
+            <Text style={styles.needText}>
+              {lockingIn || (shieldStarted && outside)
+                ? 'Locking in… usually a few minutes'
+                : `${
+                    hidden
+                      ? 'Zcash'
+                      : `+${formatExact(state.transparentZatoshi, unit)}`
+                  } waiting outside the lock · Lock it in ›`}
+            </Text>
+          </Pressable>
+        )}
+        {phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n && (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              setSettingsStart('phrase');
+              setSettingsOpen(true);
+            }}
+            style={styles.needRow}
+          >
+            <Text style={styles.needText}>
+              Recovery phrase not confirmed yet ›
+            </Text>
+          </Pressable>
+        )}
+        {confirming !== '0' && (
+          <View style={styles.centerRow}>
+            <Confirming
+              text={
+                hidden
+                  ? `Part of your balance is ${waitingText(waiting)}`
+                  : `${formatExact(confirming, unit)} ${waitingText(waiting)}`
+              }
+            />
+          </View>
+        )}
+
+        {lockOpen ? (
+          <>
+            <View style={styles.brass}>
+              <BrassButton
+                label="Release Zcash"
+                icon="arrowUp"
+                onPress={() => setSending(true)}
+              />
+            </View>
             <Pressable
               accessibilityRole="button"
               hitSlop={10}
-              onPress={() => setActivityOpen(true)}
-              style={styles.seeAll}
+              onPress={closeLock}
+              style={styles.closeRow}
             >
-              <Text style={styles.link}>See all activity</Text>
+              <Text style={styles.closeText}>Close the lock</Text>
             </Pressable>
-          ) : undefined
-        }
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            {synced
-              ? 'No payments yet. Tap Receive to get your address.'
-              : 'Payments appear here as the wallet syncs.'}
-          </Text>
-        }
-        contentContainerStyle={styles.list}
-        showsVerticalScrollIndicator={false}
-      />
+          </>
+        ) : (
+          <View style={styles.brass}>
+            <BrassButton label="Lock more" onPress={() => setReceiving(true)} />
+          </View>
+        )}
+
+        {lastLine != null && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens Activity"
+            hitSlop={10}
+            onPress={() => setActivityOpen(true)}
+            style={styles.lastRow}
+          >
+            <Text style={styles.lastText}>{lastLine} ›</Text>
+          </Pressable>
+        )}
+
+        {state.error != null && (
+          <Text style={[styles.error, styles.center]}>{state.error}</Text>
+        )}
+
+        <View style={styles.spaceBelow} />
+      </Animated.ScrollView>
 
       <View style={styles.bottomBar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Settings"
-          onPress={() => {
-            setSettingsStart(undefined);
-            setSettingsOpen(true);
-          }}
-          style={styles.bottomItem}
-        >
-          <Icon name="settings" color={colors.textMuted} />
-          <Text style={styles.bottomLabel}>Settings</Text>
-        </Pressable>
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.dot,
+              synced && styles.dotOk,
+              (cutOff || state.status === 'DISCONNECTED') && styles.dotDanger,
+            ]}
+          />
+          <Text style={styles.status} numberOfLines={2}>
+            {statusText}
+            <Text style={styles.statusSep}> · </Text>
+            Shielded
+          </Text>
+          {torWanted && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Tor: ${
+                TOR_LABELS[state.tor]
+              }. Open network settings`}
+              hitSlop={12}
+              onPress={() => {
+                setSettingsStart('server');
+                setSettingsOpen(true);
+              }}
+              style={[
+                styles.tor,
+                state.tor === 'starting' && styles.torStarting,
+              ]}
+            >
+              <Icon
+                name="onion"
+                size={18}
+                color={
+                  state.tor === 'on' || state.tor === 'starting'
+                    ? colors.gold
+                    : colors.danger
+                }
+              />
+            </Pressable>
+          )}
+        </View>
+        <View style={styles.links}>
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={10}
+            onPress={() => setActivityOpen(true)}
+          >
+            <Text style={styles.linkText}>Activity</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={10}
+            onPress={() => {
+              setSettingsStart(undefined);
+              setSettingsOpen(true);
+            }}
+            style={styles.linkGap}
+          >
+            <Text style={styles.linkText}>Settings</Text>
+          </Pressable>
+        </View>
       </View>
 
       <Toast
@@ -507,6 +809,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         onChooseCurrency={chooseCurrency}
         birthdayHeight={wallet.birthdayHeight}
         tor={state.tor}
+        pools={state.pools}
         walletAddress={state.address}
         onErased={onErased}
         onClose={() => {
@@ -529,7 +832,24 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         currency={shownCurrency}
         price={price}
         onSent={announceSent}
-        onClose={() => setSending(false)}
+        onClose={closeLock}
+      />
+      <LockInPrompt
+        visible={lockInOpen && !locked}
+        amountText={hidden ? null : formatExact(state.transparentZatoshi, unit)}
+        ready={synced}
+        busy={shielding}
+        note={shieldNote}
+        onLockIn={shield}
+        onClose={() => setLockInOpen(false)}
+      />
+      <OpenLockPrompt
+        visible={asking}
+        days={heldDays}
+        onOpen={openLock}
+        onKeep={() => setAsking(false)}
+        wait={openWait}
+        check={checkOnOpen}
       />
     </View>
   );
@@ -537,90 +857,101 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
 
 const useStyles = makeStyles(colors => ({
   container: { flex: 1 },
-  list: { padding: space.lg },
-  statusRow: { flexDirection: 'row', alignItems: 'center' },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.gold,
-    marginRight: space.sm,
-  },
-  dotOk: { backgroundColor: colors.ok },
-  dotDanger: { backgroundColor: colors.danger },
-  status: {
-    flex: 1,
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.textMuted,
-  },
-  link: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.gold },
-  publicCard: {
-    backgroundColor: colors.inkRaised,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: space.md,
-    marginBottom: space.lg,
-  },
-  publicTitle: {
-    fontFamily: fonts.sansMedium,
-    fontSize: 15,
-    color: colors.text,
-  },
-  publicAction: { marginTop: space.md },
-  bottomBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-    paddingTop: space.sm,
-    paddingHorizontal: space.lg,
-  },
-  bottomItem: { alignItems: 'center', paddingHorizontal: space.md },
-  bottomLabel: {
-    fontFamily: fonts.sans,
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  seeAll: { alignSelf: 'center', paddingVertical: space.md },
-  torStarting: { opacity: 0.45 },
-  captionIcons: { flexDirection: 'row', alignItems: 'center' },
-  captionIcon: { marginRight: space.md },
-  captionRow: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    paddingTop: space.sm,
+    paddingHorizontal: space.md,
+    zIndex: 1,
   },
-  balanceBlock: { marginTop: space.xl, marginBottom: space.xl },
-  caption: {
-    fontFamily: fonts.sansMedium,
-    fontSize: 12,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: colors.textMuted,
-  },
-  fiat: {
-    fontFamily: fonts.sansMedium,
-    fontSize: 12,
-    letterSpacing: 0.6,
+  wordmark: { flexDirection: 'row', alignItems: 'baseline' },
+  brand: {
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 13,
+    letterSpacing: 5.5,
     color: colors.gold,
-    marginTop: space.sm,
-    fontVariant: ['tabular-nums'],
   },
+  product: {
+    fontFamily: fonts.serif,
+    fontSize: 15,
+    color: colors.textMuted,
+    marginLeft: 6,
+  },
+  topIcons: {
+    position: 'absolute',
+    right: space.md,
+    top: space.sm - 6,
+    flexDirection: 'row',
+  },
+  topIcon: { padding: 6, marginLeft: 4 },
+  // Centred on the screen, a little below the middle.
+  // A little more room above than below: the lock sits just under the
+  // middle of the screen.
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+  },
+  spaceAbove: { flexGrow: 1.6 },
+  spaceBelow: { flexGrow: 1 },
+  hero: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: space.md,
+  },
+  heroLayer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: -space.lg,
+    right: -space.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringWaiting: { opacity: 0.5 },
+  lockButton: { marginTop: 10 },
+  center: { textAlign: 'center' },
+  centerRow: { alignItems: 'center' },
   balanceRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    flexWrap: 'wrap',
-    marginTop: space.xs,
+    justifyContent: 'center',
+    marginTop: space.sm,
   },
   balance: {
     fontFamily: fonts.serifMedium,
     color: colors.text,
     fontVariant: ['tabular-nums'],
+    flexShrink: 1,
   },
-  unit: { fontFamily: fonts.serif, fontSize: 24, color: colors.gold },
+  unit: { fontFamily: fonts.sansMedium, fontSize: 15, color: colors.textMuted },
+  held: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: space.sm + 2,
+  },
+  fiat: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  milestone: { fontFamily: fonts.sansMedium, color: colors.gold },
+  brass: { alignSelf: 'center', width: 230, marginTop: space.lg },
+  needRow: { alignSelf: 'center', marginTop: space.sm, paddingVertical: 2 },
+  needText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    color: colors.gold,
+    textAlign: 'center',
+  },
+  closeRow: { alignSelf: 'center', marginTop: space.md, paddingVertical: 4 },
+  closeText: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.gold },
+  lastRow: { alignSelf: 'center', marginTop: space.md, paddingVertical: 4 },
+  lastText: { fontFamily: fonts.sans, fontSize: 12, color: colors.textMuted },
   note: {
     fontFamily: fonts.sans,
     fontSize: 13,
@@ -631,16 +962,36 @@ const useStyles = makeStyles(colors => ({
     fontFamily: fonts.sans,
     fontSize: 14,
     color: colors.danger,
-    marginBottom: space.md,
-  },
-  actions: { flexDirection: 'row', marginHorizontal: -space.xs },
-  action: { flex: 1, marginHorizontal: space.xs },
-  historyTitle: { marginTop: space.xl, marginBottom: space.xs },
-  empty: {
-    fontFamily: fonts.sans,
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.textMuted,
     marginTop: space.md,
   },
+  bottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+    paddingTop: space.sm + 2,
+    paddingHorizontal: space.md + 4,
+  },
+  statusRow: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.gold,
+    marginRight: space.sm,
+  },
+  dotOk: { backgroundColor: colors.ok },
+  dotDanger: { backgroundColor: colors.danger },
+  status: {
+    flexShrink: 1,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  statusSep: { opacity: 0.6 },
+  tor: { marginLeft: space.sm },
+  torStarting: { opacity: 0.45 },
+  links: { flexDirection: 'row', marginLeft: space.md },
+  linkGap: { marginLeft: space.md + 4 },
+  linkText: { fontFamily: fonts.sans, fontSize: 12, color: colors.textMuted },
 }));

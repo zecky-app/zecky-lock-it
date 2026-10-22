@@ -2,11 +2,17 @@ import React from 'react';
 import { ActivityIndicator, Pressable, Text } from 'react-native';
 import { fonts, makeStyles, space, useColors } from '../theme';
 import { noteEvent } from '../wallet/entropy';
+import { BrassButton } from './lock/BrassButton';
 
 interface Props {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'quiet';
+  /**
+   * One rule everywhere, as on Home: the main action is brass; other
+   * actions are gold text; the way back (Done, Back, Cancel) is quiet
+   * text; something that cannot be undone is red.
+   */
+  variant?: 'primary' | 'quiet' | 'back' | 'danger';
   busy?: boolean;
   disabled?: boolean;
 }
@@ -20,10 +26,22 @@ export function Button({
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
-  const primary = variant === 'primary';
+  if (variant === 'primary') {
+    return (
+      <BrassButton
+        label={label}
+        icon={null}
+        onPress={onPress}
+        busy={busy}
+        disabled={disabled}
+      />
+    );
+  }
+  const danger = variant === 'danger';
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled: disabled || busy }}
       disabled={disabled || busy}
       onPress={() => {
         noteEvent();
@@ -31,14 +49,20 @@ export function Button({
       }}
       style={({ pressed }) => [
         styles.base,
-        primary ? styles.primary : styles.quiet,
+        danger && styles.danger,
         (pressed || disabled) && styles.dim,
       ]}
     >
       {busy ? (
-        <ActivityIndicator color={primary ? colors.onGold : colors.gold} />
+        <ActivityIndicator color={danger ? colors.danger : colors.gold} />
       ) : (
-        <Text style={[styles.label, !primary && styles.quietLabel]}>
+        <Text
+          style={[
+            styles.label,
+            variant === 'back' && styles.back,
+            danger && styles.dangerLabel,
+          ]}
+        >
           {label}
         </Text>
       )}
@@ -48,15 +72,20 @@ export function Button({
 
 const useStyles = makeStyles(colors => ({
   base: {
-    minHeight: 54,
-    borderRadius: 14,
+    minHeight: 46,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space.lg,
   },
-  primary: { backgroundColor: colors.gold },
-  quiet: { borderWidth: 1, borderColor: colors.line },
-  dim: { opacity: 0.6 },
-  label: { fontFamily: fonts.sansSemiBold, fontSize: 16, color: colors.onGold },
-  quietLabel: { color: colors.text },
+  danger: {
+    minHeight: 50,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: colors.danger + '14',
+  },
+  dim: { opacity: 0.5 },
+  label: { fontFamily: fonts.sansMedium, fontSize: 15, color: colors.gold },
+  back: { color: colors.textMuted },
+  dangerLabel: { fontFamily: fonts.sansSemiBold, color: colors.danger },
 }));

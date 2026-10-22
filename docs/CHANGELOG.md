@@ -2,6 +2,34 @@
 
 What changed in each version, in plain words. Newest first.
 
+## 0.0.18 (October 22, 2026)
+- A new look, the same as Lock it on the Mac: a golden lock on a fine
+  guilloché medallion, a ring that fills towards your next milestone, and
+  how long your Zcash has been locked.
+- Opening the lock asks "Really open the lock?" with a tick and a short
+  wait, then Face ID or your code. The open lock shows Release Zcash and
+  closes again by itself.
+- Keys to the lock (Settings › Security): choose Face ID or a Zecky code,
+  when Zecky asks (now also when opening Zecky with Face ID), and the wait
+  before the lock opens. Making it easier asks that it is you first. The
+  "app code" is now called the Zecky code.
+- Lock more (was Receive): the Z in the QR code, the address in groups of
+  four, fits the screen without scrolling.
+- Release (was Send): a receipt with the total released and what stays
+  locked; the lock closes when it is done.
+- Activity: a summary, filters and payments by month.
+- Settings and How Zecky works: cards, and short chapters that open and
+  close.
+- The value in your currency shows as "≈" under the balance.
+- Syncing shows a percentage while catching up, and a Scan button adds your
+  Rock it server from its QR code.
+- Security: the viewing key now always asks for Face ID or your code, and
+  choosing a new Zecky code asks first.
+- Zcash that arrives on your public address shows as "waiting outside the
+  lock" with one tap to lock it in, and messages say when it is done.
+- Every screen in the new style, with the same buttons everywhere, and the
+  lock's words: release instead of send.
+
 ## 0.0.17 (October 15, 2026)
 - The wallet birthday block is shown above your 24 words, when you create a
   wallet and under Security, so it goes on your paper too. Restoring with it

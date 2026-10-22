@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { PhraseCheck } from '../components/PhraseCheck';
 import { PhraseConfirmed } from '../components/PhraseConfirmed';
-import { fonts, makeStyles, space } from '../theme';
+import { SheetCorner, SheetHeader } from '../components/lock';
+import { makeStyles, space } from '../theme';
 
 interface Props {
   mnemonic: string;
@@ -26,12 +27,12 @@ export function ConfirmPhraseScreen(props: Props) {
   }
   return (
     <View style={styles.container}>
+      <SheetCorner />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>Check your paper</Text>
-        <Text style={styles.body}>
-          Pick three of your words, so you know the paper is right before any
-          funds arrive.
-        </Text>
+        <SheetHeader
+          title="Check your paper"
+          subtitle="Pick three of your words, so you know the paper is right before any Zcash arrives."
+        />
         <PhraseCheck
           mnemonic={props.mnemonic}
           onPassed={() => setPassed(true)}
@@ -44,16 +45,7 @@ export function ConfirmPhraseScreen(props: Props) {
   );
 }
 
-const useStyles = makeStyles(colors => ({
-  container: { flex: 1, padding: space.lg },
-  scroll: { paddingBottom: space.lg },
-  title: { fontFamily: fonts.serifMedium, fontSize: 30, color: colors.text },
-  body: {
-    fontFamily: fonts.sans,
-    fontSize: 15,
-    lineHeight: 23,
-    color: colors.textMuted,
-    marginTop: space.sm,
-    marginBottom: space.lg,
-  },
+const useStyles = makeStyles(() => ({
+  container: { flex: 1, padding: space.lg, overflow: 'hidden' },
+  scroll: { paddingBottom: space.lg, paddingTop: space.sm },
 }));

@@ -12,3 +12,8 @@ test('builds a square matrix with finder patterns', () => {
     }
   }
 });
+
+test('high error correction makes a denser code', () => {
+  const text = 'u1' + 'q'.repeat(200);
+  expect(makeQrMatrix(text, 'H').size).toBeGreaterThan(makeQrMatrix(text).size);
+});

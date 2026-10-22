@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, ScrollView, Share, Text, View } from 'react-native';
 import type { Transaction } from 'react-native-zcash';
 import { Button } from '../components/Button';
+import { SheetCorner, SheetHeader } from '../components/lock';
 import { sentEntry } from '../lib/sentLog';
 import { isDust, isPending, txKind } from '../lib/transactions';
 import { formatDisplay, formatZec } from '../lib/zec';
@@ -15,25 +16,25 @@ interface Props {
 }
 
 const TITLES = {
-  received: 'Payment received',
-  sent: 'Payment sent',
-  self: 'Sent to yourself',
-  shielded: 'Funds shielded',
+  received: 'Locked in',
+  sent: 'Released',
+  self: 'Released to yourself',
+  shielded: 'Locked in from public',
 };
 
 function status(tx: Transaction): string {
-  if (tx.isExpired) return 'Expired. This payment was never sent.';
+  if (tx.isExpired) return 'Expired. This never left the lock.';
   if (isPending(tx)) {
     return sentEntry(tx.rawTransactionId)?.waiting
-      ? 'Not delivered to the network yet. Zecky sends it automatically as soon as there is a connection. Do not send it again.'
-      : 'Confirming…';
+      ? 'Not delivered to the network yet. Zecky sends it out by itself as soon as there is a connection. Do not release it again.'
+      : 'Waiting for a block…';
   }
   return `Confirmed in block ${tx.minedHeight.toLocaleString('en-US')}`;
 }
 
 function fullDate(tx: Transaction): string | null {
   if (tx.blockTimeInSeconds <= 0) return null;
-  return new Date(tx.blockTimeInSeconds * 1000).toLocaleString(undefined, {
+  return new Date(tx.blockTimeInSeconds * 1000).toLocaleString('en-US', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -74,7 +75,7 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
   const sentAt =
     sent == null
       ? null
-      : new Date(sent.at).toLocaleString(undefined, {
+      : new Date(sent.at).toLocaleString('en-US', {
           day: 'numeric',
           month: 'long',
           hour: '2-digit',
@@ -83,8 +84,7 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
   const expiry = (tx as Transaction & { expiryHeight?: number }).expiryHeight;
   return (
     <>
-      <Text style={styles.title}>{TITLES[txKind(tx)]}</Text>
-      <Text style={styles.status}>{status(tx)}</Text>
+      <SheetHeader title={TITLES[txKind(tx)]} subtitle={status(tx)} />
       {isDust(tx) && (
         <Text style={styles.status}>
           Not counted in your balance: this payment is too small to be worth
@@ -94,8 +94,8 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
 
       {self && (
         <Text style={styles.status}>
-          This went to one of your own addresses. Only the network fee left your
-          wallet.
+          This went to one of your own addresses. Only the network fee left the
+          lock.
         </Text>
       )}
 
@@ -111,14 +111,14 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
           </Field>
         )}
         {date == null && sentAt != null && (
-          <Field label="Sent from this phone">
+          <Field label="Released from this phone">
             <Text style={styles.value}>{sentAt}</Text>
           </Field>
         )}
         {isPending(tx) && expiry != null && (
           <Field label="Cancelled if not confirmed by">
             <Text style={styles.value}>
-              Block {expiry.toLocaleString('en-US')}. Nothing leaves your wallet
+              Block {expiry.toLocaleString('en-US')}. Nothing leaves the lock
               then.
             </Text>
           </Field>
@@ -129,7 +129,9 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
           </Field>
         )}
         {tx.toAddress != null && tx.toAddress !== '' && (
-          <Field label={self ? 'Sent to (your own address)' : 'Sent to'}>
+          <Field
+            label={self ? 'Released to (your own address)' : 'Released to'}
+          >
             <Text style={styles.mono} selectable>
               {tx.toAddress}
             </Text>
@@ -172,6 +174,7 @@ export function TransactionScreen({ tx, onClose }: Props) {
       onRequestClose={onClose}
     >
       <View style={styles.container}>
+        <SheetCorner />
         {tx != null && (
           <ScrollView contentContainerStyle={styles.scroll}>
             <TransactionDetails tx={tx} />
@@ -185,43 +188,52 @@ export function TransactionScreen({ tx, onClose }: Props) {
           }}
         />
         <View style={styles.gap} />
-        <Button label="Done" onPress={onClose} />
+        <Button label="Done" variant="back" onPress={onClose} />
       </View>
     </Modal>
   );
 }
 
 const useStyles = makeStyles(colors => ({
-  container: { flex: 1, backgroundColor: colors.ink, padding: space.lg },
-  scroll: { paddingBottom: space.lg },
-  title: {
-    fontFamily: fonts.serifMedium,
-    fontSize: 30,
-    color: colors.text,
-    marginTop: space.md,
+  // Sheets reach under the home indicator: the bottom buttons sit higher,
+  // clear of the swipe area and easy to reach with a thumb.
+  container: {
+    flex: 1,
+    backgroundColor: colors.ink,
+    padding: space.lg,
+    paddingBottom: space.xl + space.sm,
+    overflow: 'hidden',
   },
+  scroll: { paddingBottom: space.lg, paddingTop: space.sm },
   status: {
     fontFamily: fonts.sans,
-    fontSize: 15,
+    fontSize: 13.5,
+    lineHeight: 20,
     color: colors.textMuted,
-    marginTop: space.sm,
+    marginBottom: space.sm,
   },
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
     paddingHorizontal: space.md,
-    marginTop: space.lg,
+    marginTop: space.sm,
   },
-  field: { paddingVertical: space.md },
+  field: {
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.line,
+  },
   label: {
-    fontFamily: fonts.sansMedium,
-    fontSize: 12,
-    letterSpacing: 1.2,
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 11,
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
     color: colors.textMuted,
-    marginBottom: space.xs,
+    marginBottom: 4,
   },
-  value: { fontFamily: fonts.sans, fontSize: 17, color: colors.text },
+  value: { fontFamily: fonts.sans, fontSize: 15, color: colors.text },
   sub: {
     fontFamily: fonts.sans,
     fontSize: 13,
@@ -229,8 +241,8 @@ const useStyles = makeStyles(colors => ({
     marginTop: 2,
   },
   mono: {
-    fontFamily: fonts.sans,
-    fontSize: 14,
+    fontFamily: 'Menlo',
+    fontSize: 12.5,
     lineHeight: 21,
     color: colors.text,
   },

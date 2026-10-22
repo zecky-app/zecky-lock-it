@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import * as Keychain from 'react-native-keychain';
 import {
   AppState,
   Modal,
@@ -11,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Button } from '../components/Button';
+import { SheetCorner, SheetHeader } from '../components/lock';
 import { Icon, IconName } from '../components/Icon';
 import { BirthdayNote } from '../components/BirthdayNote';
 import { PhraseGrid } from '../components/PhraseGrid';
@@ -25,7 +27,17 @@ import {
   verifyPin,
 } from '../lib/pin';
 import { confirmOwner } from '../lib/deviceAuth';
+import { asksAt, setAskAt, useAskWhen } from '../lib/askWhen';
+import { needsOwner } from '../lib/lockRules';
+import {
+  OPEN_WAITS,
+  OpenWait,
+  setOpenWait,
+  useOpenWait,
+} from '../lib/openWait';
+import { formatExact } from '../lib/zec';
 import type { Unit } from '../lib/zec';
+import { POOLS, PoolBalances } from '../lib/pools';
 import {
   THEME_MODES,
   fonts,
@@ -60,6 +72,8 @@ interface Props {
   birthdayHeight: number;
   /** Current Tor state of the running wallet. */
   tor: TorStatus;
+  /** Per pool, for Settings › About. */
+  pools: PoolBalances | null;
   /** The wallet's default address, to clear its saved address list. */
   walletAddress: string | null;
   /** Called after the wallet has been erased from this phone. */
@@ -74,7 +88,7 @@ type Page =
   | 'about'
   | 'display'
   | 'security'
-  | 'lock'
+  | 'keys'
   | 'phrase'
   | 'viewkey'
   | 'erase'
@@ -89,7 +103,15 @@ type PinFlow =
   | { kind: 'off' }
   | { kind: 'reveal' }
   | { kind: 'revealKey' }
-  | { kind: 'erase' };
+  | { kind: 'erase' }
+  | { kind: 'confirm' };
+
+const WAIT_LABELS: Record<OpenWait, string> = {
+  10: 'Ask, then wait 10 seconds',
+  5: 'Ask, then wait 5 seconds',
+  3: 'Ask, then wait 3 seconds',
+  0: 'Don’t ask',
+};
 
 const THEME_LABELS = { dark: 'Dark', light: 'Light', auto: 'Auto' } as const;
 
@@ -98,13 +120,27 @@ const TITLES: Record<Page, string> = {
   about: 'About',
   display: 'Display',
   security: 'Security',
-  lock: 'App code',
+  keys: 'Keys to the lock',
   phrase: 'Recovery phrase',
   viewkey: 'Viewing key',
   erase: 'Erase wallet',
   how: 'How Zecky works',
   contacts: 'Contacts',
   server: 'Network',
+};
+
+const SUBTITLES: Record<Page, string> = {
+  menu: 'Make Zecky Lock it yours.',
+  about: 'Versions and details of this install.',
+  display: 'How amounts and colors look.',
+  security: 'Who can open Zecky and the lock.',
+  keys: 'Everything that lets you in or opens the lock, in one place.',
+  phrase: 'The 24 words that restore your Zcash on any phone.',
+  viewkey: 'See-only access, for an accountant or a watch-only device.',
+  erase: 'Remove the wallet from this iPhone.',
+  how: 'What happens with your Zcash, keys and data.',
+  contacts: 'Addresses you release to often.',
+  server: 'How Zecky reaches the Zcash network.',
 };
 
 function MenuRow(props: {
@@ -114,8 +150,11 @@ function MenuRow(props: {
   icon?: IconName;
   /** Last row of its card: no divider underneath. */
   last?: boolean;
+  /** Erase and the like: red. */
+  danger?: boolean;
 }) {
   const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable
       accessibilityRole="button"
@@ -128,11 +167,23 @@ function MenuRow(props: {
       ]}
     >
       {props.icon != null && (
-        <View style={styles.menuIcon}>
-          <Icon name={props.icon} size={20} />
+        <View style={[styles.menuIcon, props.danger && styles.menuIconDanger]}>
+          <Icon
+            name={props.icon}
+            size={16}
+            color={props.danger ? colors.danger : colors.gold}
+          />
         </View>
       )}
-      <Text style={[styles.lineLabel, styles.menuLabel]}>{props.label}</Text>
+      <Text
+        style={[
+          styles.lineLabel,
+          styles.menuLabel,
+          props.danger && styles.dangerLabel,
+        ]}
+      >
+        {props.label}
+      </Text>
       <Text style={styles.lineValue} numberOfLines={1}>
         {props.value}
       </Text>
@@ -163,6 +214,7 @@ export function SettingsScreen({
   onChooseCurrency,
   birthdayHeight,
   tor,
+  pools,
   startOn,
   walletAddress,
   onErased,
@@ -229,6 +281,30 @@ export function SettingsScreen({
   }, []);
 
   const pinEnabled = usePinEnabled();
+  const openWait = useOpenWait();
+  useAskWhen();
+  const askStart = asksAt('start', pinEnabled);
+  const askOpenLock = asksAt('openLock', pinEnabled);
+  // Making Zecky easier to open (fewer checks, a shorter wait) first asks
+  // that it is the owner: the Zecky code, or else Face ID / the passcode.
+  const pendingChange = useRef<(() => void) | null>(null);
+  const whenOwner = async (change: () => void) => {
+    if (pinEnabled) {
+      pendingChange.current = change;
+      setFlow({ kind: 'confirm' });
+      return;
+    }
+    const result = await confirmOwner('Change Keys to the lock');
+    if (result !== 'cancelled') change();
+  };
+  const [hasPasscode, setHasPasscode] = useState(true);
+  useEffect(() => {
+    if (page === 'keys') {
+      Keychain.isPasscodeAuthAvailable()
+        .then(setHasPasscode)
+        .catch(() => setHasPasscode(true));
+    }
+  }, [page]);
   const themeMode = useThemeMode();
   const server = useServer();
   const torWanted = useTorWanted();
@@ -273,6 +349,12 @@ export function SettingsScreen({
           await clearPin();
           setFlow(null);
         }
+      } else if (flow.kind === 'confirm') {
+        if (await checkCurrent(pin)) {
+          setFlow(null);
+          pendingChange.current?.();
+          pendingChange.current = null;
+        }
       } else if (flow.kind === 'erase') {
         if (await checkCurrent(pin)) {
           setFlow(null);
@@ -298,6 +380,13 @@ export function SettingsScreen({
     } catch (e) {
       setPinMessage(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // Without a Zecky code, Face ID or the passcode guards the viewing key,
+  // as it does the recovery phrase.
+  const revealKeyWithDeviceCheck = async () => {
+    const result = await confirmOwner('Show viewing key');
+    if (result !== 'cancelled') await revealKey();
   };
 
   const revealKey = async () => {
@@ -347,12 +436,13 @@ export function SettingsScreen({
       onRequestClose={onClose}
     >
       <View style={styles.container}>
+        <SheetCorner />
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets
         >
-          <Text style={styles.title}>{TITLES[page]}</Text>
+          <SheetHeader title={TITLES[page]} subtitle={SUBTITLES[page]} />
 
           {page === 'menu' && (
             <>
@@ -378,7 +468,7 @@ export function SettingsScreen({
                 <MenuRow
                   icon="lock"
                   label="Security"
-                  value={pinEnabled ? 'Code on' : ''}
+                  value={pinEnabled ? 'Zecky code' : 'Face ID'}
                   onPress={() => setPage('security')}
                 />
                 <MenuRow
@@ -424,6 +514,49 @@ export function SettingsScreen({
                 <Line label="System" value={about.system} />
                 <Line label="React Native" value={about.reactNative} />
               </View>
+
+              <Text style={styles.section}>Your Zcash by pool</Text>
+              <View style={styles.card}>
+                {POOLS.map((pool, i) => {
+                  const b = pools?.[pool.key];
+                  const total = b?.total ?? '0';
+                  const confirming =
+                    b != null && BigInt(b.available) < BigInt(b.total);
+                  return (
+                    <View
+                      key={pool.key}
+                      style={[
+                        styles.line,
+                        i < POOLS.length - 1 && styles.divider,
+                      ]}
+                    >
+                      <View style={styles.lineText}>
+                        <Text style={styles.lineLabel}>{pool.name}</Text>
+                        <Text style={styles.lineHint}>{pool.about}</Text>
+                      </View>
+                      <View style={styles.poolValue}>
+                        <Text style={styles.poolAmount}>
+                          {pools == null
+                            ? '…'
+                            : hidden
+                            ? '••••'
+                            : formatExact(total, unit)}
+                        </Text>
+                        {confirming && !hidden && (
+                          <Text style={styles.poolSub}>
+                            {formatExact(b.available, unit)} usable now
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+              <Text style={styles.info}>
+                Together they make up your balance. New Zcash locks into
+                Ironwood. The oldest pool, Sprout, is closed to new Zcash and is
+                not used by Zecky.
+              </Text>
             </>
           )}
 
@@ -524,65 +657,193 @@ export function SettingsScreen({
           {page === 'server' && <ServerPage tor={tor} />}
 
           {page === 'security' && (
-            <View style={styles.card}>
-              <MenuRow
-                label="App code"
-                value={pinEnabled ? 'On' : 'Off'}
-                onPress={() => setPage('lock')}
-              />
-              <MenuRow
-                label="Recovery phrase"
-                value={phraseUnconfirmed ? 'Not confirmed' : 'View'}
-                onPress={() => setPage('phrase')}
-              />
-              <MenuRow
-                label="Viewing key"
-                value="View"
-                onPress={() => setPage('viewkey')}
-              />
-              <MenuRow
-                label="Erase wallet"
-                value=""
-                onPress={() => setPage('erase')}
-              />
-            </View>
+            <>
+              <View style={styles.card}>
+                <MenuRow
+                  icon="lock"
+                  label="Keys to the lock"
+                  value={pinEnabled ? 'Zecky code' : 'Face ID'}
+                  onPress={() => setPage('keys')}
+                />
+                <MenuRow
+                  icon="eyeOff"
+                  label="Recovery phrase"
+                  value={phraseUnconfirmed ? 'Not confirmed' : 'View'}
+                  onPress={() => setPage('phrase')}
+                />
+                <MenuRow
+                  icon="eye"
+                  label="Viewing key"
+                  value="View"
+                  onPress={() => setPage('viewkey')}
+                  last
+                />
+              </View>
+              <View style={[styles.card, styles.dangerCard]}>
+                <MenuRow
+                  icon="info"
+                  label="Erase wallet"
+                  value=""
+                  onPress={() => setPage('erase')}
+                  danger
+                  last
+                />
+              </View>
+            </>
           )}
 
-          {page === 'lock' && flow == null && (
+          {page === 'keys' && flow == null && (
             <>
               <Text style={styles.info}>
-                {pinEnabled
-                  ? 'Zecky asks for your 4-digit code every time it is opened.'
-                  : 'Ask for a 4-digit code every time Zecky is opened, and before the recovery phrase is shown.'}
+                Making it easier always asks that it is you first.
               </Text>
-              <Text style={styles.info}>
-                There is no way to reset a forgotten code. You would have to
-                delete the app and restore your wallet from the 24 words, so
-                make sure they are written down first.
-              </Text>
-              <View style={styles.reveal}>
-                {pinEnabled ? (
-                  <>
-                    <Button
-                      label="Change code"
-                      onPress={() =>
-                        setFlow({ kind: 'change', verified: false })
-                      }
-                    />
-                    <View style={styles.gap} />
-                    <Button
-                      label="Turn off"
-                      variant="quiet"
-                      onPress={() => setFlow({ kind: 'off' })}
-                    />
-                  </>
-                ) : (
-                  <Button
-                    label="Set a code"
-                    onPress={() => setFlow({ kind: 'set' })}
-                  />
-                )}
+
+              <Text style={styles.section}>Check it’s you with</Text>
+              <View style={styles.card}>
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: !pinEnabled }}
+                  onPress={() => pinEnabled && setFlow({ kind: 'off' })}
+                  style={({ pressed }) => [
+                    styles.line,
+                    styles.divider,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.lineText}>
+                    <Text style={styles.lineLabel}>
+                      Face ID or iPhone passcode
+                    </Text>
+                    <Text style={styles.lineHint}>
+                      The iPhone’s own lock. Nothing extra to remember.
+                    </Text>
+                  </View>
+                  {!pinEnabled && <Text style={styles.check}>✓</Text>}
+                </Pressable>
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: pinEnabled }}
+                  onPress={() =>
+                    // A new code could later switch every check off, so
+                    // choosing one first asks Face ID or the passcode.
+                    !pinEnabled &&
+                    needsOwner({ kind: 'newCode' }) &&
+                    whenOwner(() => setFlow({ kind: 'set' }))
+                  }
+                  style={({ pressed }) => [
+                    styles.line,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.lineText}>
+                    <Text style={styles.lineLabel}>Zecky code</Text>
+                    <Text style={styles.lineHint}>
+                      4 digits, only for Zecky. A forgotten code cannot be
+                      reset: you would restore from the 24 words.
+                    </Text>
+                  </View>
+                  {pinEnabled && <Text style={styles.check}>✓</Text>}
+                </Pressable>
               </View>
+              {pinEnabled && (
+                <Pressable
+                  accessibilityRole="button"
+                  hitSlop={10}
+                  onPress={() => setFlow({ kind: 'change', verified: false })}
+                  style={styles.inlineLink}
+                >
+                  <Text style={styles.inlineLinkText}>Change code</Text>
+                </Pressable>
+              )}
+              {!pinEnabled && !hasPasscode && (
+                <Text style={styles.warning}>
+                  This iPhone has no passcode, so there is nothing to ask. Set
+                  one in the iPhone’s Settings, or choose a Zecky code.
+                </Text>
+              )}
+
+              <Text style={styles.section}>Ask when</Text>
+              <View style={styles.card}>
+                <View style={[styles.line, styles.divider]}>
+                  <Text style={[styles.lineLabel, styles.menuLabel]}>
+                    Opening Zecky
+                  </Text>
+                  <Switch
+                    value={askStart}
+                    onValueChange={next =>
+                      needsOwner({ kind: 'ask', from: askStart, to: next })
+                        ? whenOwner(() => setAskAt('start', next))
+                        : setAskAt('start', next)
+                    }
+                    trackColor={{ true: colors.gold, false: colors.line }}
+                    ios_backgroundColor={colors.line}
+                  />
+                </View>
+                <View style={[styles.line, styles.divider]}>
+                  <Text style={[styles.lineLabel, styles.menuLabel]}>
+                    Opening the lock
+                  </Text>
+                  <Switch
+                    value={askOpenLock}
+                    onValueChange={next =>
+                      needsOwner({ kind: 'ask', from: askOpenLock, to: next })
+                        ? whenOwner(() => setAskAt('openLock', next))
+                        : setAskAt('openLock', next)
+                    }
+                    trackColor={{ true: colors.gold, false: colors.line }}
+                    ios_backgroundColor={colors.line}
+                  />
+                </View>
+                <View style={[styles.line, styles.divider]}>
+                  <Text style={[styles.lineLabel, styles.menuLabel]}>
+                    Showing the recovery phrase
+                  </Text>
+                  <Text style={styles.lineValue}>Always</Text>
+                </View>
+                <View style={[styles.line, styles.divider]}>
+                  <Text style={[styles.lineLabel, styles.menuLabel]}>
+                    Showing the viewing key
+                  </Text>
+                  <Text style={styles.lineValue}>Always</Text>
+                </View>
+                <View style={styles.line}>
+                  <Text style={[styles.lineLabel, styles.menuLabel]}>
+                    Erasing the wallet
+                  </Text>
+                  <Text style={styles.lineValue}>Always</Text>
+                </View>
+              </View>
+
+              <Text style={styles.section}>Really open the lock?</Text>
+              <View style={styles.card}>
+                {OPEN_WAITS.map((w, i) => (
+                  <Pressable
+                    key={w}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: w === openWait }}
+                    onPress={() =>
+                      needsOwner({ kind: 'wait', from: openWait, to: w })
+                        ? whenOwner(() => setOpenWait(w))
+                        : setOpenWait(w)
+                    }
+                    style={({ pressed }) => [
+                      styles.line,
+                      i < OPEN_WAITS.length - 1 && styles.divider,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={styles.lineLabel}>{WAIT_LABELS[w]}</Text>
+                    {w === openWait && <Text style={styles.check}>✓</Text>}
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.info}>
+                The question and the short wait are there for when someone is
+                rushing you.
+                {openWait === 0 && !askOpenLock
+                  ? ' Right now one tap opens the lock.'
+                  : ''}
+              </Text>
             </>
           )}
 
@@ -598,11 +859,13 @@ export function SettingsScreen({
 
           {page === 'erase' && flow == null && (
             <>
-              <Text style={styles.warning}>
-                This removes everything Zecky keeps on this phone: the recovery
-                phrase, the app code, your contacts, the payment history and
-                every setting, including your servers.
-              </Text>
+              <View style={[styles.card, styles.dangerCard, styles.cardPad]}>
+                <Text style={[styles.warning, styles.noTop]}>
+                  This removes everything Zecky keeps on this phone: the
+                  recovery phrase, the Zecky code, your contacts, the payment
+                  history and every setting, including your servers.
+                </Text>
+              </View>
               <Text style={styles.info}>
                 Your funds are not destroyed. They stay on the Zcash blockchain
                 and can be restored on any phone with the 24 words. Without the
@@ -616,13 +879,14 @@ export function SettingsScreen({
                 {eraseArmed ? (
                   <Button
                     label="Erase everything now"
+                    variant="danger"
                     busy={erasing}
                     onPress={erase}
                   />
                 ) : (
                   <Button
                     label="Erase wallet from this phone"
-                    variant="quiet"
+                    variant="danger"
                     onPress={() =>
                       pinEnabled
                         ? setFlow({ kind: 'erase' })
@@ -656,7 +920,7 @@ export function SettingsScreen({
                     onPress={
                       pinEnabled
                         ? () => setFlow({ kind: 'revealKey' })
-                        : revealKey
+                        : revealKeyWithDeviceCheck
                     }
                   />
                 </View>
@@ -751,18 +1015,20 @@ export function SettingsScreen({
           )}
         </ScrollView>
         {page === 'menu' ? (
-          <Button label="Done" onPress={onClose} />
+          <Button label="Done" variant="back" onPress={onClose} />
         ) : (
           <Button
             label="Back"
-            variant="quiet"
+            variant="back"
             onPress={() => {
-              if (flow != null) setFlow(null);
-              else if (
+              if (flow != null) {
+                pendingChange.current = null;
+                setFlow(null);
+              } else if (
                 page === 'phrase' ||
                 page === 'viewkey' ||
                 page === 'erase' ||
-                page === 'lock'
+                page === 'keys'
               ) {
                 setPage('security');
               } else setPage('menu');
@@ -775,29 +1041,40 @@ export function SettingsScreen({
 }
 
 const useStyles = makeStyles(colors => ({
-  container: { flex: 1, backgroundColor: colors.ink, padding: space.lg },
-  scroll: { paddingBottom: space.lg },
-  title: {
-    fontFamily: fonts.serifMedium,
-    fontSize: 30,
-    color: colors.text,
-    marginTop: space.md,
+  // Sheets reach under the home indicator: the bottom buttons sit higher,
+  // clear of the swipe area and easy to reach with a thumb.
+  container: {
+    flex: 1,
+    backgroundColor: colors.ink,
+    padding: space.lg,
+    paddingBottom: space.xl + space.sm,
+    overflow: 'hidden',
   },
+  scroll: { paddingBottom: space.lg, paddingTop: space.sm },
   section: {
-    fontFamily: fonts.sansMedium,
-    fontSize: 12,
-    letterSpacing: 1.2,
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 11,
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
     color: colors.textMuted,
     marginTop: space.lg,
-    marginBottom: space.sm,
+    marginBottom: -space.xs,
   },
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
     paddingHorizontal: space.md,
-    marginTop: space.lg,
+    marginTop: space.md,
   },
+  cardPad: { paddingVertical: space.md },
+  dangerCard: {
+    borderColor: colors.danger + '66',
+    backgroundColor: colors.danger + '12',
+  },
+  dangerLabel: { color: colors.danger },
+  noTop: { marginTop: 0 },
   line: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -831,13 +1108,13 @@ const useStyles = makeStyles(colors => ({
     marginRight: space.sm,
     marginBottom: space.sm,
   },
-  chipOn: { backgroundColor: colors.gold, borderColor: colors.gold },
+  chipOn: { backgroundColor: colors.gold + '22', borderColor: colors.gold },
   chipLabel: {
     fontFamily: fonts.sansMedium,
     fontSize: 14,
     color: colors.textMuted,
   },
-  chipLabelOn: { color: colors.onGold },
+  chipLabelOn: { color: colors.gold },
   currencyHint: {
     fontFamily: fonts.sans,
     fontSize: 13,
@@ -846,8 +1123,17 @@ const useStyles = makeStyles(colors => ({
     paddingBottom: space.md,
   },
   pressed: { opacity: 0.5 },
-  menuLine: { paddingVertical: 16 },
-  menuIcon: { width: 32 },
+  menuLine: { paddingVertical: 13 },
+  menuIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.gold + '1F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  menuIconDanger: { backgroundColor: colors.danger + '1F' },
   menuLabel: { flex: 1 },
   divider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -877,6 +1163,26 @@ const useStyles = makeStyles(colors => ({
   },
   gap: { height: space.sm },
   pad: { marginTop: space.xl },
+  poolValue: { alignItems: 'flex-end' },
+  poolAmount: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.text,
+    fontVariant: ['tabular-nums'],
+  },
+  poolSub: {
+    fontFamily: fonts.sans,
+    fontSize: 11.5,
+    color: colors.gold,
+    marginTop: 2,
+  },
+  check: { fontFamily: fonts.sansSemiBold, fontSize: 17, color: colors.gold },
+  inlineLink: { alignSelf: 'flex-start', marginTop: space.sm, padding: 4 },
+  inlineLinkText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.gold,
+  },
   chevron: {
     fontFamily: fonts.sans,
     fontSize: 22,
@@ -885,9 +1191,9 @@ const useStyles = makeStyles(colors => ({
   },
   unitSwitch: {
     flexDirection: 'row',
-    borderRadius: 10,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.gold + '55',
     overflow: 'hidden',
   },
   unitOption: {
@@ -897,5 +1203,5 @@ const useStyles = makeStyles(colors => ({
     paddingVertical: 6,
     paddingHorizontal: 12,
   },
-  unitOn: { backgroundColor: colors.gold, color: colors.onGold },
+  unitOn: { backgroundColor: colors.gold + '22', color: colors.gold },
 }));

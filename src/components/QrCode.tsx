@@ -1,20 +1,29 @@
 import React, { useMemo } from 'react';
-import { View } from 'react-native';
+import { Text, View } from 'react-native';
 import { makeQrMatrix } from '../lib/qr';
-import { makeStyles } from '../theme';
+import { fonts, makeStyles } from '../theme';
+import { METAL } from './lock/metal';
 
 interface Props {
   value: string;
   /** Outer width and height in points, including the white margin. */
   size: number;
+  /**
+   * The Zecky Z in the middle, as on the Mac. The code is then made with
+   * high error correction so it still scans.
+   */
+  badge?: boolean;
 }
 
 const QUIET_MODULES = 3;
 
 /** QR code drawn with plain views, so it needs no native graphics library. */
-export function QrCode({ value, size }: Props) {
+export function QrCode({ value, size, badge = false }: Props) {
   const styles = useStyles();
-  const matrix = useMemo(() => makeQrMatrix(value), [value]);
+  const matrix = useMemo(
+    () => makeQrMatrix(value, badge ? 'H' : 'M'),
+    [value, badge],
+  );
   // Whole-point modules keep the edges crisp; leftover space becomes margin.
   const cell = Math.max(
     1,
@@ -47,6 +56,22 @@ export function QrCode({ value, size }: Props) {
           </View>
         ))}
       </View>
+      {badge && (
+        <View
+          style={[
+            styles.badge,
+            {
+              width: Math.round(inner * 0.2),
+              height: Math.round(inner * 0.2),
+              borderRadius: Math.round(inner * 0.04),
+            },
+          ]}
+        >
+          <Text style={[styles.badgeZ, { fontSize: Math.round(inner * 0.13) }]}>
+            Z
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -60,4 +85,13 @@ const useStyles = makeStyles(() => ({
     justifyContent: 'center',
   },
   dark: { position: 'absolute', top: 0, backgroundColor: '#14161C' },
+  badge: {
+    position: 'absolute',
+    backgroundColor: METAL.plateInk,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeZ: { fontFamily: fonts.serifMedium, color: METAL.gold, marginTop: -2 },
 }));

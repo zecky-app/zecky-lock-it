@@ -123,9 +123,11 @@ const useStyles = makeStyles(colors => ({
   },
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
     paddingHorizontal: space.md,
-    marginTop: space.lg,
+    marginTop: space.md,
   },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
   rowText: { flex: 1, paddingRight: space.md },

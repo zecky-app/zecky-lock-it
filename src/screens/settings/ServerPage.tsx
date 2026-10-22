@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, Switch, Text, TextInput, View } from 'react-native';
+import { Camera } from 'react-native-camera-kit';
 import { Tools } from 'react-native-zcash';
 import { Button } from '../../components/Button';
 import {
@@ -38,7 +39,7 @@ async function checkServer(server: Server): Promise<void> {
 const TOR_STATUS: Record<TorStatus, string> = {
   off: 'Off. The server sees your internet address.',
   starting: 'Connecting to Tor…',
-  on: 'On. Sending and looking up your payments goes through Tor.',
+  on: 'On. Releases and looking up your payments go through Tor.',
   failed:
     'Tor could not connect on this network. The wallet is using a direct connection.',
   unavailable: 'Tor is not available in this build of Zecky.',
@@ -53,6 +54,28 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
   const [custom, setCustom] = useState('');
   const [name, setName] = useState('');
   const [checking, setChecking] = useState<string | null>(null);
+  // Scanning a server QR, such as the Wallet server code on Rock it's page.
+  const [scanning, setScanning] = useState(false);
+  const onScanned = (value: string) => {
+    if (!scanning) return;
+    setScanning(false);
+    const server = parseServer(value);
+    if (server == null) {
+      setMessage('That QR code is not a server address. Nothing was changed.');
+      return;
+    }
+    setMessage(null);
+    setCustom(serverLabel(server));
+    if (name.trim() === '') {
+      setName(
+        server.host.endsWith('.ts.net')
+          ? 'Rock it (Tailscale)'
+          : isHomeNode(server)
+          ? 'Rock it at home'
+          : '',
+      );
+    }
+  };
   const [message, setMessage] = useState<string | null>(null);
 
   /** Checks a server and switches to it. A name saves it under that name. */
@@ -117,10 +140,10 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
       </View>
       <Text style={styles.remark}>Tor might slow down the connection.</Text>
       <Text style={styles.info}>
-        Tor hides your internet address when Zecky sends a payment, looks up
-        your own payments, checks the chain height or fetches the price.
-        Downloading blocks stays direct, so the server can still tell that a
-        Zcash wallet is syncing. Some networks block Tor.
+        Tor hides your internet address when Zecky releases Zcash, looks up your
+        own payments, checks the chain height or fetches the price. Downloading
+        blocks stays direct, so the server can still tell that a Zcash wallet is
+        syncing. Some networks block Tor.
       </Text>
 
       <View style={styles.card}>
@@ -238,14 +261,43 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
         placeholderTextColor={colors.goldDim}
         selectionColor={colors.gold}
       />
+      {scanning ? (
+        <>
+          <View style={styles.cameraFrame}>
+            <Camera
+              style={styles.camera}
+              scanBarcode
+              showFrame={false}
+              onReadCode={event => onScanned(event.nativeEvent.codeStringValue)}
+            />
+          </View>
+          <View style={styles.gap} />
+          <Button
+            label="Cancel scan"
+            variant="back"
+            onPress={() => setScanning(false)}
+          />
+        </>
+      ) : (
+        <>
+          <View style={styles.gap} />
+          <Button
+            label="Scan QR code"
+            variant="quiet"
+            onPress={() => {
+              setMessage(null);
+              setScanning(true);
+            }}
+          />
+        </>
+      )}
       <Text style={styles.info}>
-        Your own node: use its home address, and its Tailscale address for
-        when you are away. Save both under their own name.
+        Your own node: scan the Wallet server code on its Rock it page, or type
+        its address. Save the home and Tailscale addresses under their own name.
       </Text>
       <View style={styles.gap} />
       <Button
         label="Check, save and use"
-        variant="quiet"
         disabled={parsed == null}
         busy={
           checking != null && parsed != null && checking === serverLabel(parsed)
@@ -258,6 +310,14 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
 }
 
 const useStyles = makeStyles(colors => ({
+  cameraFrame: {
+    height: 280,
+    marginTop: space.md,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+  },
+  camera: { flex: 1 },
   info: {
     fontFamily: fonts.sans,
     fontSize: 14,
@@ -273,9 +333,11 @@ const useStyles = makeStyles(colors => ({
   },
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
     paddingHorizontal: space.md,
-    marginTop: space.lg,
+    marginTop: space.md,
   },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
   pressed: { opacity: 0.5 },

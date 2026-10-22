@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { Button } from '../components/Button';
+import { SheetCorner, SheetHeader } from '../components/lock';
 import { Tools } from 'react-native-zcash';
 import { EARLIEST_BIRTHDAY_HEIGHT } from '../config';
 import { estimateBirthdayHeight, estimateTipHeight } from '../lib/birthday';
@@ -121,14 +122,15 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <SheetCorner />
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Restore your wallet</Text>
-        <Text style={styles.body}>
-          Enter your recovery phrase, with a space between each word.
-        </Text>
+        <SheetHeader
+          title="Restore your wallet"
+          subtitle="Enter your 24 words, with a space between each word."
+        />
 
         <TextInput
           style={[styles.input, styles.phrase]}
@@ -211,13 +213,13 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
       </ScrollView>
       <Button label="Restore wallet" onPress={submit} busy={busy || working} />
       <View style={styles.gap} />
-      <Button label="Back" onPress={onBack} variant="quiet" disabled={busy} />
+      <Button label="Back" onPress={onBack} variant="back" disabled={busy} />
     </KeyboardAvoidingView>
   );
 }
 
 const useStyles = makeStyles(colors => ({
-  container: { flex: 1, padding: space.lg },
+  container: { flex: 1, padding: space.lg, overflow: 'hidden' },
   scroll: { paddingBottom: space.lg },
   title: { fontFamily: fonts.serifMedium, fontSize: 30, color: colors.text },
   body: {

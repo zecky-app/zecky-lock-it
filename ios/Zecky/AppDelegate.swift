@@ -69,7 +69,56 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     cover.tag = privacyCoverTag
     cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     cover.backgroundColor = UIColor(red: 0.078, green: 0.086, blue: 0.110, alpha: 1)
+    cover.addSubview(privacyMark(in: cover.bounds))
     window.addSubview(cover)
+  }
+
+  /// The closed Zecky lock with "ZECKY Lock it" under it, centred: what the
+  /// app switcher shows instead of the app.
+  private func privacyMark(in bounds: CGRect) -> UIView {
+    let lock = UIImageView(image: UIImage(named: "CoverLock"))
+    lock.contentMode = .scaleAspectFit
+    lock.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      lock.widthAnchor.constraint(equalToConstant: 132),
+      lock.heightAnchor.constraint(equalToConstant: 150),
+    ])
+
+    let gold = UIColor(red: 0.831, green: 0.651, blue: 0.341, alpha: 1)
+    let brand = UILabel()
+    brand.attributedText = NSAttributedString(
+      string: "ZECKY",
+      attributes: [
+        .font: UIFont(name: "Inter-SemiBold", size: 15) ?? .systemFont(ofSize: 15, weight: .semibold),
+        .kern: 6,
+        .foregroundColor: gold,
+      ])
+    let product = UILabel()
+    product.text = "Lock it"
+    product.font = UIFont(name: "Newsreader-Regular", size: 18) ?? .systemFont(ofSize: 18)
+    product.textColor = UIColor(white: 0.62, alpha: 1)
+
+    let wordmark = UIStackView(arrangedSubviews: [brand, product])
+    wordmark.axis = .horizontal
+    wordmark.alignment = .lastBaseline
+    wordmark.spacing = 6
+
+    let stack = UIStackView(arrangedSubviews: [lock, wordmark])
+    stack.axis = .vertical
+    stack.alignment = .center
+    stack.spacing = 22
+    stack.sizeToFit()
+    stack.layoutIfNeeded()
+    let size = stack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+    stack.frame = CGRect(
+      x: (bounds.width - size.width) / 2,
+      y: (bounds.height - size.height) / 2,
+      width: size.width,
+      height: size.height)
+    stack.autoresizingMask = [
+      .flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin,
+    ]
+    return stack
   }
 
   func sceneDidBecomeActive(_ scene: UIScene) {

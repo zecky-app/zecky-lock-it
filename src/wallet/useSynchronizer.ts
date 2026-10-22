@@ -25,6 +25,7 @@ import { getServer, isHomeNode, useServer } from '../lib/server';
 import { getTorWanted, TorStatus, useTorWanted } from '../lib/tor';
 import { mergeTransactions } from '../lib/transactions';
 import type { StoredWallet } from './seed';
+import type { PoolBalances } from '../lib/pools';
 
 export type SyncStatus = StatusEvent['name'] | 'STARTING';
 
@@ -32,6 +33,8 @@ export interface WalletState {
   status: SyncStatus;
   /** 0–100 */
   scanProgress: number;
+  /** Latest block of the network, 0 until the engine reports it. */
+  networkHeight: number;
   totalZatoshi: string;
   availableZatoshi: string;
   /** Shielded funds that can be sent right now. */
@@ -45,12 +48,15 @@ export interface WalletState {
   transactions: Transaction[];
   /** Whether sensitive network calls currently go through Tor. */
   tor: TorStatus;
+  /** Per pool, as last reported by the engine; null until it reports. */
+  pools: PoolBalances | null;
   error: string | null;
 }
 
 const initialState: WalletState = {
   status: 'STARTING',
   scanProgress: 0,
+  networkHeight: 0,
   totalZatoshi: '0',
   availableZatoshi: '0',
   spendableZatoshi: '0',
@@ -59,6 +65,7 @@ const initialState: WalletState = {
   transparentZatoshi: '0',
   transactions: [],
   tor: 'off',
+  pools: null,
   error: null,
 };
 
@@ -238,11 +245,29 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
             // Part-way through a scan the engine can count less than the
             // wallet holds. Keep the higher figure until it is synced; the
             // engine reports again the moment it is.
+            const pools: PoolBalances = {
+              orchard: {
+                total: balance.orchardTotalZatoshi,
+                available: balance.orchardAvailableZatoshi,
+              },
+              sapling: {
+                total: balance.saplingTotalZatoshi,
+                available: balance.saplingAvailableZatoshi,
+              },
+              transparent: {
+                total: balance.transparentTotalZatoshi,
+                available: balance.transparentAvailableZatoshi,
+              },
+              ironwood: {
+                total: balance.ironwoodTotalZatoshi ?? '0',
+                available: balance.ironwoodAvailableZatoshi ?? '0',
+              },
+            };
             setState(prev =>
               prev.status !== 'SYNCED' &&
               BigInt(next.totalZatoshi) < BigInt(prev.totalZatoshi)
-                ? prev
-                : { ...prev, ...next },
+                ? { ...prev, pools }
+                : { ...prev, ...next, pools },
             );
           },
           onStatusChanged: status =>
@@ -263,7 +288,11 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
               ),
             }));
           },
-          onUpdate: event => patch({ scanProgress: event.scanProgress }),
+          onUpdate: event =>
+            patch({
+              scanProgress: event.scanProgress,
+              networkHeight: event.networkBlockHeight,
+            }),
           onError: error => patch({ error: friendlyError(error.message) }),
         });
         started.current = true;

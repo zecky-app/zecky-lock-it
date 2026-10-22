@@ -13,6 +13,7 @@ export type IconName =
   | 'onion'
   | 'globe'
   | 'lock'
+  | 'lockOpen'
   | 'info'
   | 'arrowDown'
   | 'arrowUp';
@@ -105,6 +106,12 @@ export function Icon({ name, size = 22, color }: Props) {
         <>
           <Rect x={5} y={11} width={14} height={9} rx={2} {...stroke} />
           <Path d="M8 11V8a4 4 0 0 1 8 0v3" {...stroke} />
+        </>
+      )}
+      {name === 'lockOpen' && (
+        <>
+          <Rect x={5} y={11} width={14} height={9} rx={2} {...stroke} />
+          <Path d="M8 11V7.5a4 4 0 0 1 7.6-1.7" {...stroke} />
         </>
       )}
       {name === 'info' && (

@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, StatusBar } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Tools } from 'react-native-zcash';
+import { asksAt, useAskWhen } from './src/lib/askWhen';
 import { describeError } from './src/lib/errors';
 import { clearIfFreshInstall } from './src/lib/freshInstall';
 import { resetAllSettings } from './src/lib/resetSettings';
@@ -46,6 +47,12 @@ function App() {
 
   const pinEnabled = usePinEnabled();
   const [locked, setLocked] = useState(true);
+  // Keys to the lock: whether opening Zecky asks for the Zecky code, or
+  // else Face ID / the iPhone passcode.
+  useAskWhen();
+  const askAtStart = asksAt('start', pinEnabled);
+  const askAtStartRef = useRef(askAtStart);
+  askAtStartRef.current = askAtStart;
 
   // After Erase wallet, settings go back to defaults once the wallet screen
   // has closed (changing the server while it runs would restart the wallet).
@@ -75,7 +82,7 @@ function App() {
         ]),
       )
       .then(([wallet, hasPin]) => {
-        setLocked(hasPin);
+        setLocked(asksAt('start', hasPin));
         setStage(
           wallet == null
             ? { name: 'welcome' }
@@ -92,11 +99,11 @@ function App() {
   // Lock again whenever the app is sent to the background.
   useEffect(() => {
     const listener = AppState.addEventListener('change', state => {
-      if (state === 'background') setLocked(true);
+      if (state === 'background' && askAtStartRef.current) setLocked(true);
     });
     return () => listener.remove();
   }, []);
-  const showLock = pinEnabled && locked && stage.name === 'home';
+  const showLock = askAtStart && locked && stage.name === 'home';
 
   const create = useCallback(async () => {
     setBusy(true);
@@ -193,7 +200,9 @@ function App() {
             }}
           />
         )}
-        {showLock && <LockScreen onUnlock={() => setLocked(false)} />}
+        {showLock && (
+          <LockScreen withCode={pinEnabled} onUnlock={() => setLocked(false)} />
+        )}
       </SafeAreaView>
     </SafeAreaProvider>
   );

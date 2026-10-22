@@ -10,6 +10,11 @@ export function addOwnAddresses(list: (string | null | undefined)[]): void {
   for (const address of list) if (address) ownAddresses.add(address);
 }
 
+/** Whether `address` is one of this wallet's own addresses. */
+export function isOwnAddress(address: string): boolean {
+  return ownAddresses.has(address.trim());
+}
+
 /** For Erase wallet. */
 export function clearOwnAddresses(): void {
   ownAddresses.clear();

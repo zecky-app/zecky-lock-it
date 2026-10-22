@@ -46,11 +46,11 @@ export function describeError(e: unknown): string {
   return friendlyError(e instanceof Error ? e.message : String(e));
 }
 
-export const OFFLINE_SEND = 'No internet connection. Nothing was sent.';
+export const OFFLINE_SEND = 'No internet connection. Nothing was released.';
 export const SEND_PENDING =
-  'No connection to the Zcash network right now. Your payment is saved and will be sent automatically as soon as the connection is back. Do not send it again.';
+  'No connection to the Zcash network right now. Your release is saved and goes out by itself as soon as the connection is back. Do not release it again.';
 export const SEND_REJECTED =
-  'The network has not accepted this payment yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves your wallet. Do not send it again.';
+  'The network has not accepted this release yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves the lock. Do not release it again.';
 
 /** An error for a payment that was created and will still go out by itself. */
 export function paymentSavedError(message: string): Error {
@@ -62,4 +62,4 @@ export function isPaymentSaved(e: unknown): boolean {
 }
 
 export const HOME_NODE_SEND =
-  'Rock it cannot be reached on this connection. Use your home Wi-Fi or turn on Tailscale, or pick another server under Network. Nothing was sent.';
+  'Rock it cannot be reached on this connection. Use your home Wi-Fi or turn on Tailscale, or pick another server under Network. Nothing was released.';

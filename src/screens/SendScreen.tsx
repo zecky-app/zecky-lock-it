@@ -5,13 +5,22 @@ import {
   Modal,
   Platform,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { Camera } from 'react-native-camera-kit';
 import { Tools } from 'react-native-zcash';
+import Svg, { Line } from 'react-native-svg';
 import { Button } from '../components/Button';
+import {
+  BrassButton,
+  SheetCorner,
+  SheetHeader,
+  ZeckyLock,
+  useCardStyle,
+} from '../components/lock';
 import { Confirming } from '../components/Confirming';
 import { Icon } from '../components/Icon';
 import { NETWORK } from '../config';
@@ -20,6 +29,8 @@ import { addContact, contactName, useContacts } from '../lib/contacts';
 import { isPaymentSaved } from '../lib/errors';
 import { parseScanned } from '../lib/paymentUri';
 import { waitingPayments } from '../lib/sentLog';
+import { isOwnAddress } from '../lib/transactions';
+import { slowestWaiting, waitingText } from '../lib/confirmations';
 import { fiatEditable, fiatToZatoshi, formatFiat } from '../lib/price';
 import {
   Unit,
@@ -28,7 +39,6 @@ import {
   formatExact,
   formatZec,
   isTransparentAddress,
-  otherUnit,
   parseAmount,
   shortenAddress,
   toEditable,
@@ -78,11 +88,14 @@ export function SendScreen({
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
+  const card = useCardStyle();
   const [step, setStep] = useState<Step>({ name: 'form' });
   const [address, setAddress] = useState('');
   const [amount, setAmount] = useState('');
   const [memo, setMemo] = useState('');
   const [max, setMax] = useState(false);
+  // The private note stays out of the way until asked for.
+  const [noteOpen, setNoteOpen] = useState(false);
   const [fiatMode, setFiatMode] = useState(false);
   const contacts = useContacts();
   const confirming = confirmingZatoshi(wallet);
@@ -114,6 +127,7 @@ export function SendScreen({
       setAmount('');
       setMemo('');
       setMax(false);
+      setNoteOpen(false);
       setFiatMode(false);
       setBusy(false);
       setError(null);
@@ -175,7 +189,7 @@ export function SendScreen({
   const review = async () => {
     const toAddress = address.trim();
     const typed = max ? null : parseTyped(amount);
-    if (toAddress === '') return setError('Enter the address to send to.');
+    if (toAddress === '') return setError('Enter the address to release to.');
     if (!max && typed == null) {
       return setError(
         fiat != null
@@ -254,6 +268,17 @@ export function SendScreen({
 
   const waiting = waitingPayments(wallet.transactions).length;
 
+  // On "Released", the open lock closes again after a moment.
+  const [closedAgain, setClosedAgain] = useState(false);
+  useEffect(() => {
+    if (step.name !== 'sent' && step.name !== 'saved') {
+      setClosedAgain(false);
+      return;
+    }
+    const t = setTimeout(() => setClosedAgain(true), 600);
+    return () => clearTimeout(t);
+  }, [step.name]);
+
   return (
     <Modal
       visible={visible}
@@ -265,113 +290,120 @@ export function SendScreen({
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <SheetCorner />
         {step.name === 'form' && (
           <>
             <ScrollView
               contentContainerStyle={styles.scroll}
               keyboardShouldPersistTaps="handled"
             >
-              <Text style={styles.title}>Send ZEC</Text>
-              {waiting > 0 && (
-                <Text style={styles.error}>
-                  {waiting === 1
-                    ? 'A payment from this phone is still waiting to be sent.'
-                    : `${waiting} payments from this phone are still waiting to be sent.`}{' '}
-                  It goes out automatically once the network can be reached.
-                  Check Activity before sending again.
-                </Text>
-              )}
-
-              <View style={styles.labelRow}>
-                <Text style={[styles.label, styles.labelInRow]}>To</Text>
-                <View style={styles.toActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Contacts"
-                    hitSlop={10}
-                    onPress={() => {
-                      setError(null);
-                      setNewName('');
-                      setStep({ name: 'contacts' });
-                    }}
-                    style={styles.scanButton}
-                  >
-                    <Icon name="person" size={18} />
-                    <Text style={styles.scanLabel}>Contacts</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Scan a QR code"
-                    hitSlop={10}
-                    onPress={() => {
-                      setError(null);
-                      setStep({ name: 'scan' });
-                    }}
-                    style={styles.scanButton}
-                  >
-                    <Icon name="scan" size={18} />
-                    <Text style={styles.scanLabel}>Scan</Text>
-                  </Pressable>
-                </View>
-              </View>
-              <TextInput
-                style={[styles.input, styles.multiline]}
-                value={address}
-                onChangeText={setAddress}
-                multiline
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-                placeholder="Zcash address"
-                placeholderTextColor={colors.goldDim}
-                selectionColor={colors.gold}
+              <SheetHeader
+                title="Release Zcash"
+                subtitle="Taken out of the lock. Everything else stays locked."
               />
-              {contactName(contacts, address) != null && (
-                <Text style={styles.hint}>
-                  Contact: {contactName(contacts, address)}
-                </Text>
-              )}
-              {transparent && (
-                <Text style={styles.hint}>
-                  This is a transparent address. The amount and both addresses
-                  will be publicly visible.
+              {waiting > 0 && (
+                <Text style={[styles.error, styles.noTop]}>
+                  {waiting === 1
+                    ? 'A release from this phone is still waiting to go out.'
+                    : `${waiting} releases from this phone are still waiting to go out.`}{' '}
+                  It goes out by itself once the network can be reached. Check
+                  Activity before releasing again.
                 </Text>
               )}
 
-              <View style={styles.labelRow}>
-                <Text style={[styles.label, styles.labelInRow]}>Amount</Text>
-                <View style={styles.unitSwitch}>
-                  {(
-                    [
-                      'ZEC',
-                      'zats',
-                      ...(currency != null && price != null
-                        ? (['fiat'] as const)
-                        : []),
-                    ] as const
-                  ).map(option => {
-                    const on =
-                      option === 'fiat'
-                        ? fiat != null
-                        : fiat == null && option === unit;
-                    return (
-                      <Pressable
-                        key={option}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: on }}
-                        onPress={() => chooseInput(option)}
-                      >
-                        <Text style={[styles.unitOption, on && styles.unitOn]}>
-                          {option === 'fiat' ? currency : option}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+              <View style={[card, styles.formCard]}>
+                {/* To */}
+                <View style={styles.fieldHead}>
+                  <Text style={styles.fieldLabel}>TO</Text>
+                  <View style={styles.toActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Contacts"
+                      hitSlop={10}
+                      onPress={() => {
+                        setError(null);
+                        setNewName('');
+                        setStep({ name: 'contacts' });
+                      }}
+                      style={styles.iconButton}
+                    >
+                      <Icon name="person" size={18} />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Scan a QR code"
+                      hitSlop={10}
+                      onPress={() => {
+                        setError(null);
+                        setStep({ name: 'scan' });
+                      }}
+                      style={styles.iconButton}
+                    >
+                      <Icon name="scan" size={18} />
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
-              <View style={styles.amountRow}>
                 <TextInput
-                  style={[styles.input, styles.amountInput]}
+                  style={styles.toInput}
+                  value={address}
+                  onChangeText={setAddress}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  placeholder="Zcash address"
+                  placeholderTextColor={colors.goldDim}
+                  selectionColor={colors.gold}
+                />
+                {contactName(contacts, address) != null && (
+                  <Text style={styles.contactLine}>
+                    ✓ {contactName(contacts, address)}
+                  </Text>
+                )}
+                {transparent && (
+                  <Text style={styles.warnLine}>
+                    Transparent address: the amount and both addresses will be
+                    public.
+                  </Text>
+                )}
+
+                <View style={styles.rule} />
+
+                {/* Amount */}
+                <View style={styles.fieldHead}>
+                  <Text style={styles.fieldLabel}>AMOUNT</Text>
+                  <View style={styles.unitSwitch}>
+                    {(
+                      [
+                        'ZEC',
+                        'zats',
+                        ...(currency != null && price != null
+                          ? (['fiat'] as const)
+                          : []),
+                      ] as const
+                    ).map(option => {
+                      const on =
+                        option === 'fiat'
+                          ? fiat != null
+                          : fiat == null && option === unit;
+                      return (
+                        <Pressable
+                          key={option}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: on }}
+                          onPress={() => chooseInput(option)}
+                        >
+                          <Text
+                            style={[styles.unitOption, on && styles.unitOn]}
+                          >
+                            {option === 'fiat' ? currency : option}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+                <TextInput
+                  style={styles.amountInput}
                   value={max ? maxText : amount}
                   onChangeText={text => {
                     setMax(false);
@@ -388,59 +420,85 @@ export function SendScreen({
                   placeholderTextColor={colors.goldDim}
                   selectionColor={colors.gold}
                 />
+                <View style={styles.amountFoot}>
+                  <Text style={styles.hint}>
+                    {max
+                      ? 'Everything; the fee comes out of it.'
+                      : fiat != null && parseTyped(amount) != null
+                      ? `≈ ${formatExact(parseTyped(amount) ?? '0', unit)}`
+                      : `${formatExact(wallet.spendableZatoshi, unit)}${approx(
+                          wallet.spendableZatoshi,
+                        )} available`}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: max }}
+                    hitSlop={10}
+                    onPress={() => {
+                      setAmount('');
+                      setMax(!max);
+                    }}
+                    style={[styles.maxChip, max && styles.maxChipOn]}
+                  >
+                    <Text style={[styles.maxLabel, max && styles.maxLabelOn]}>
+                      Max
+                    </Text>
+                  </Pressable>
+                </View>
+                {confirming !== '0' && (
+                  <Confirming
+                    text={`${formatExact(confirming, unit)} ${waitingText(
+                      slowestWaiting(wallet.transactions, wallet.networkHeight),
+                    )}`}
+                  />
+                )}
+
+                {!transparent && (noteOpen || memo !== '') && (
+                  <>
+                    <View style={styles.rule} />
+                    <Text style={styles.fieldLabel}>PRIVATE NOTE</Text>
+                    <TextInput
+                      style={styles.noteInput}
+                      value={memo}
+                      onChangeText={setMemo}
+                      multiline
+                      maxLength={500}
+                      autoFocus={memo === ''}
+                      placeholder="Only the receiver can read this"
+                      placeholderTextColor={colors.goldDim}
+                      selectionColor={colors.gold}
+                    />
+                  </>
+                )}
+              </View>
+
+              {!transparent && !noteOpen && memo === '' && (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ selected: max }}
-                  onPress={() => {
-                    setAmount('');
-                    setMax(!max);
-                  }}
-                  style={[styles.maxButton, max && styles.maxButtonOn]}
+                  hitSlop={10}
+                  onPress={() => setNoteOpen(true)}
+                  style={styles.addNote}
                 >
-                  <Text style={[styles.maxLabel, max && styles.maxLabelOn]}>
-                    Max
-                  </Text>
+                  <Text style={styles.addNoteText}>+ Add a private note</Text>
                 </Pressable>
-              </View>
-              <Text style={styles.hint}>
-                {max
-                  ? 'Sending everything. The network fee comes out of this amount.'
-                  : fiat != null && parseTyped(amount) != null
-                  ? `≈ ${formatExact(parseTyped(amount) ?? '0', unit)}`
-                  : `${formatExact(wallet.spendableZatoshi, unit)}${approx(
-                      wallet.spendableZatoshi,
-                    )} available`}
-              </Text>
-              {confirming !== '0' && (
-                <Confirming
-                  text={`${formatExact(
-                    confirming,
-                    unit,
-                  )} available in a few minutes`}
-                />
-              )}
-
-              {!transparent && (
-                <>
-                  <Text style={styles.label}>Private note (optional)</Text>
-                  <TextInput
-                    style={[styles.input, styles.multiline]}
-                    value={memo}
-                    onChangeText={setMemo}
-                    multiline
-                    maxLength={500}
-                    placeholder="Only the receiver can read this"
-                    placeholderTextColor={colors.goldDim}
-                    selectionColor={colors.gold}
-                  />
-                </>
               )}
 
               {error != null && <Text style={styles.error}>{error}</Text>}
             </ScrollView>
-            <Button label="Review" onPress={review} busy={busy} />
-            <View style={styles.gap} />
-            <Button label="Cancel" onPress={onClose} variant="quiet" />
+            <BrassButton
+              label="Review"
+              icon="arrowUp"
+              onPress={review}
+              busy={busy}
+            />
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={onClose}
+              style={styles.quietButton}
+            >
+              <Text style={styles.quietText}>Cancel</Text>
+            </Pressable>
           </>
         )}
 
@@ -450,7 +508,7 @@ export function SendScreen({
               contentContainerStyle={styles.scroll}
               keyboardShouldPersistTaps="handled"
             >
-              <Text style={styles.title}>Contacts</Text>
+              <SheetHeader title="Contacts" />
               {contacts.length === 0 ? (
                 <Text style={styles.body}>
                   No contacts yet. Type or scan an address on the send screen
@@ -508,7 +566,7 @@ export function SendScreen({
             </ScrollView>
             <Button
               label="Back"
-              variant="quiet"
+              variant="back"
               onPress={() => {
                 setError(null);
                 setStep({ name: 'form' });
@@ -519,10 +577,10 @@ export function SendScreen({
 
         {step.name === 'scan' && (
           <>
-            <Text style={styles.title}>Scan address</Text>
-            <Text style={styles.body}>
-              Point the camera at a Zcash QR code.
-            </Text>
+            <SheetHeader
+              title="Scan address"
+              subtitle="Point the camera at a Zcash QR code."
+            />
             <View style={styles.cameraFrame}>
               <Camera
                 style={styles.camera}
@@ -539,7 +597,7 @@ export function SendScreen({
             <View style={styles.gap} />
             <Button
               label="Cancel"
-              variant="quiet"
+              variant="back"
               onPress={() => setStep({ name: 'form' })}
             />
           </>
@@ -548,71 +606,87 @@ export function SendScreen({
         {step.name === 'review' && (
           <>
             <ScrollView contentContainerStyle={styles.scroll}>
-              <Text style={styles.title}>Check the details</Text>
-              <Text style={styles.body}>
-                A sent payment cannot be reversed.
-              </Text>
+              <SheetHeader
+                title="Check before releasing"
+                subtitle="Nothing has left the lock yet. A released payment cannot be reversed."
+              />
 
-              <View style={styles.card}>
-                <Row
+              <View style={[card, styles.receipt]}>
+                <ReceiptRow
                   label="To"
-                  value={step.review.toAddress}
-                  sub={
-                    contactName(contacts, step.review.toAddress) ?? undefined
-                  }
-                  small
-                />
-                <Row
-                  label="Amount"
-                  value={formatExact(step.review.zatoshi, unit)}
-                  sub={
-                    formatExact(step.review.zatoshi, otherUnit(unit)) +
-                    approx(step.review.zatoshi)
-                  }
-                />
-                <Row
-                  label="Network fee"
-                  value={formatExact(step.review.fee, unit)}
-                  sub={formatExact(step.review.fee, otherUnit(unit))}
-                />
-                <Row
-                  label="Total leaving your wallet"
-                  value={formatExact(reviewTotal(step.review), unit)}
-                  sub={
-                    formatExact(reviewTotal(step.review), otherUnit(unit)) +
-                    approx(reviewTotal(step.review))
+                  value={
+                    isOwnAddress(step.review.toAddress)
+                      ? 'Yourself'
+                      : contactName(contacts, step.review.toAddress) ??
+                        'New address'
                   }
                   strong
                 />
-                <Row
-                  label="Balance after sending"
+                <Text style={styles.receiptAddress} selectable>
+                  {grouped(step.review.toAddress)}
+                </Text>
+                <ReceiptRow
+                  label={
+                    isOwnAddress(step.review.toAddress)
+                      ? 'Arrives at your address'
+                      : 'They receive'
+                  }
+                  value={formatExact(step.review.zatoshi, unit)}
+                  strong
+                />
+                <ReceiptRow
+                  label="Network fee"
+                  value={formatExact(step.review.fee, unit)}
+                />
+                <View style={styles.receiptRule} />
+                <ReceiptRow
+                  label="Total released"
+                  value={formatExact(reviewTotal(step.review), unit)}
+                  strong
+                />
+                <ReceiptRow
+                  label="Stays locked"
                   value={formatExact(
                     remaining(wallet.totalZatoshi, step.review),
                     unit,
                   )}
+                  accent
                 />
+                {currency != null && price != null && (
+                  <Text style={styles.receiptSub}>
+                    Total ≈{' '}
+                    {formatFiat(reviewTotal(step.review), price, currency)}
+                  </Text>
+                )}
                 {step.review.memo !== '' && (
-                  <Row label="Private note" value={step.review.memo} small />
+                  <>
+                    <View style={styles.receiptRule} />
+                    <Text style={styles.receiptLabel}>Private note</Text>
+                    <Text style={styles.receiptNote} selectable>
+                      {step.review.memo}
+                    </Text>
+                  </>
                 )}
               </View>
 
               {waiting > 0 && (
                 <Text style={styles.error}>
-                  A payment from this phone is still waiting to be sent. Check
+                  A release from this phone is still waiting to go out. Check
                   Activity first, so you do not pay twice.
                 </Text>
               )}
               {error != null && <Text style={styles.error}>{error}</Text>}
             </ScrollView>
-            <Button
-              label="Send now"
+            <BrassButton
+              label={`Release ${formatExact(step.review.zatoshi, unit)}`}
+              icon="arrowUp"
               onPress={() => send(step.review)}
               busy={busy}
             />
             <View style={styles.gap} />
             <Button
-              label="Back"
-              variant="quiet"
+              label="Change"
+              variant="back"
               disabled={busy}
               onPress={() => {
                 setError(null);
@@ -624,12 +698,20 @@ export function SendScreen({
 
         {step.name === 'saved' && (
           <>
+            <SheetHeader
+              title="Release saved"
+              subtitle="Made, but not delivered yet."
+            />
             <View style={styles.center}>
-              <Text style={styles.title}>Payment saved</Text>
-              <Text style={styles.error}>{step.message}</Text>
-              <Text style={styles.body}>
-                Activity shows it as “Waiting to send”. You can close this
-                screen.
+              <View style={styles.doneLock}>
+                <ZeckyLock open={!closedAgain} size={120} />
+              </View>
+              <Text style={[styles.error, styles.centerText]}>
+                {step.message}
+              </Text>
+              <Text style={[styles.body, styles.centerText]}>
+                Activity shows it as “Waiting to release”. Do not release it
+                again. You can close this screen.
               </Text>
             </View>
             <Button label="Done" onPress={onClose} />
@@ -638,13 +720,16 @@ export function SendScreen({
 
         {step.name === 'sent' && (
           <>
+            <SheetHeader title="Released" subtitle="The lock closes again." />
             <View style={styles.center}>
-              <Text style={styles.title}>Sent</Text>
-              <Text style={styles.body}>
-                Your payment is on its way. It can take a few minutes to
-                confirm.
+              <View style={styles.doneLock}>
+                <ZeckyLock open={!closedAgain} size={120} />
+              </View>
+              <Text style={[styles.body, styles.centerText]}>
+                It shows as confirmed once it is in a block, usually within a
+                few minutes. The rest stays locked.
               </Text>
-              <Text style={styles.hint} selectable>
+              <Text style={[styles.hint, styles.centerText]} selectable>
                 Transaction {shortenAddress(step.txId, 12)}
               </Text>
             </View>
@@ -665,41 +750,202 @@ function remaining(totalZatoshi: string, r: Review): string {
   return (left > 0n ? left : 0n).toString();
 }
 
-function Row(props: {
+/** "u1ab cdef …": groups of four, easier to compare by eye. */
+function grouped(address: string): string {
+  return (address.match(/.{1,4}/g) ?? []).join(' ');
+}
+
+/** A receipt line: label, a dotted leader, and the value on the right. */
+function ReceiptRow(props: {
   label: string;
   value: string;
-  sub?: string;
-  small?: boolean;
   strong?: boolean;
+  accent?: boolean;
 }) {
   const styles = useStyles();
+  const colors = useColors();
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{props.label}</Text>
+    <View style={styles.receiptRow}>
+      <Text style={styles.receiptRowLabel}>{props.label}</Text>
+      <View style={styles.leader}>
+        <Svg width="100%" height={2}>
+          <Line
+            x1="0"
+            y1="1"
+            x2="100%"
+            y2="1"
+            stroke={colors.textMuted}
+            strokeOpacity={0.45}
+            strokeWidth={1}
+            strokeDasharray="1 4"
+            strokeLinecap="round"
+          />
+        </Svg>
+      </View>
       <Text
         selectable
         style={[
-          styles.rowValue,
-          props.small && styles.rowSmall,
-          props.strong && styles.rowStrong,
+          styles.receiptValue,
+          props.strong && styles.receiptStrong,
+          props.accent && styles.receiptAccent,
         ]}
       >
         {props.value}
       </Text>
-      {props.sub != null && <Text style={styles.rowSub}>{props.sub}</Text>}
     </View>
   );
 }
 
 const useStyles = makeStyles(colors => ({
-  container: { flex: 1, backgroundColor: colors.ink, padding: space.lg },
-  scroll: { paddingBottom: space.lg },
+  // Sheets reach under the home indicator: the bottom buttons sit higher,
+  // clear of the swipe area and easy to reach with a thumb.
+  container: {
+    flex: 1,
+    backgroundColor: colors.ink,
+    padding: space.lg,
+    paddingBottom: space.xl + space.sm,
+    overflow: 'hidden',
+  },
+  scroll: { paddingBottom: space.lg, paddingTop: space.sm },
   center: { flex: 1, justifyContent: 'center' },
-  title: {
-    fontFamily: fonts.serifMedium,
-    fontSize: 30,
+  centerText: { textAlign: 'center' },
+  noTop: { marginTop: 0, marginBottom: space.md },
+  formCard: { paddingVertical: space.md },
+  fieldHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 28,
+  },
+  fieldLabel: {
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 11,
+    letterSpacing: 1.4,
+    color: colors.textMuted,
+  },
+  iconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gold + '1F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: space.sm,
+  },
+  toInput: {
+    fontFamily: 'Menlo',
+    fontSize: 14,
     color: colors.text,
-    marginTop: space.md,
+    paddingVertical: space.sm,
+  },
+  contactLine: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    color: colors.ok,
+  },
+  warnLine: {
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: colors.danger,
+  },
+  rule: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.line,
+    marginVertical: space.md,
+  },
+  // A fixed height: iOS sizes a text field once, sometimes before the
+  // serif font is ready, and then clips the top of the large digits.
+  amountInput: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 40,
+    color: colors.text,
+    height: 62,
+    paddingTop: 6,
+    paddingBottom: 0,
+    fontVariant: ['tabular-nums'],
+  },
+  amountFoot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  maxChip: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.gold + '77',
+    marginLeft: space.sm,
+  },
+  maxChipOn: { backgroundColor: colors.gold + '22', borderColor: colors.gold },
+  noteInput: {
+    fontFamily: fonts.sans,
+    fontSize: 15,
+    lineHeight: 21,
+    color: colors.text,
+    minHeight: 44,
+    paddingTop: space.sm,
+    textAlignVertical: 'top',
+  },
+  addNote: { alignSelf: 'flex-start', marginTop: space.md, padding: 4 },
+  addNoteText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.gold,
+  },
+  quietButton: { alignSelf: 'center', paddingVertical: space.sm + 4 },
+  quietText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 15,
+    color: colors.textMuted,
+  },
+  doneLock: { alignItems: 'center', marginBottom: space.lg },
+  receipt: { paddingVertical: space.sm + 4 },
+  receiptRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingVertical: 7,
+  },
+  receiptRowLabel: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  leader: { flex: 1, marginHorizontal: space.sm, marginBottom: 4 },
+  receiptValue: { fontFamily: fonts.sans, fontSize: 14, color: colors.text },
+  receiptStrong: { fontFamily: fonts.sansSemiBold },
+  receiptAccent: { fontFamily: fonts.sansSemiBold, color: colors.gold },
+  receiptAddress: {
+    fontFamily: 'Menlo',
+    fontSize: 11.5,
+    lineHeight: 17,
+    color: colors.textMuted,
+    marginBottom: 6,
+  },
+  receiptRule: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.line,
+    marginVertical: space.sm,
+  },
+  receiptSub: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  receiptLabel: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  receiptNote: {
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.text,
+    marginTop: 4,
   },
   body: {
     fontFamily: fonts.sans,
@@ -737,7 +983,7 @@ const useStyles = makeStyles(colors => ({
     flexDirection: 'row',
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.gold + '55',
     overflow: 'hidden',
   },
   unitOption: {
@@ -747,7 +993,7 @@ const useStyles = makeStyles(colors => ({
     paddingVertical: 6,
     paddingHorizontal: 12,
   },
-  unitOn: { backgroundColor: colors.gold, color: colors.onGold },
+  unitOn: { backgroundColor: colors.gold + '22', color: colors.gold },
   scanButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -769,30 +1015,20 @@ const useStyles = makeStyles(colors => ({
     backgroundColor: '#000000',
   },
   camera: { flex: 1 },
-  amountRow: { flexDirection: 'row' },
-  amountInput: { flex: 1 },
-  maxButton: {
-    marginLeft: space.sm,
-    paddingHorizontal: space.md,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.gold,
-    justifyContent: 'center',
-  },
-  maxButtonOn: { backgroundColor: colors.gold },
   maxLabel: {
     fontFamily: fonts.sansSemiBold,
-    fontSize: 14,
+    fontSize: 13,
     color: colors.gold,
   },
-  maxLabelOn: { color: colors.onGold },
+  maxLabelOn: { color: colors.gold },
   multiline: { minHeight: 84, textAlignVertical: 'top', lineHeight: 22 },
   hint: {
+    flexShrink: 1,
     fontFamily: fonts.sans,
     fontSize: 13,
     lineHeight: 19,
     color: colors.textMuted,
-    marginTop: space.sm,
+    marginTop: space.xs,
   },
   error: {
     fontFamily: fonts.sans,

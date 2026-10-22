@@ -79,7 +79,7 @@ export function PhraseCheck({
           onPress={onShowPhrase}
         />
         {onLater != null && (
-          <Button label="Later" variant="quiet" onPress={onLater} />
+          <Button label="Later" variant="back" onPress={onLater} />
         )}
       </View>
     </View>
