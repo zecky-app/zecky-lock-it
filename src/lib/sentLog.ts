@@ -83,6 +83,17 @@ export function txIdsFrom(message: string): string[] {
   return match ? match[1].split(',').filter(Boolean) : [];
 }
 
+/**
+ * The engine's own reason after "detail:" (or after the txids for a
+ * rejection), so "Release saved" can say why (self-audit N6).
+ */
+export function detailFrom(message: string): string | null {
+  const detail = /detail:([\s\S]+)$/.exec(message);
+  if (detail) return detail[1].trim();
+  const rejected = /txids:[0-9a-fA-F,]+\s+([\s\S]+)$/.exec(message);
+  return rejected ? rejected[1].trim() : null;
+}
+
 /** Payments from this phone that are created but not delivered yet. */
 export function waitingPayments(transactions: Transaction[]): Transaction[] {
   return transactions.filter(

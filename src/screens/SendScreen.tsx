@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Pressable,
@@ -26,10 +26,13 @@ import { Icon } from '../components/Icon';
 import { NETWORK } from '../config';
 import type { Currency } from '../config';
 import { addContact, contactName, useContacts } from '../lib/contacts';
-import { isPaymentSaved } from '../lib/errors';
-import { parseScanned } from '../lib/paymentUri';
+import { NU7_PAUSED, isPaymentSaved, savedDetail } from '../lib/errors';
+import { isMultiRecipient, parseScanned } from '../lib/paymentUri';
 import { waitingPayments } from '../lib/sentLog';
 import { isOwnAddress } from '../lib/transactions';
+import { torBlocksRelease, useTorWanted } from '../lib/tor';
+import { nu7Pauses } from '../lib/upgrades';
+import { SecurityKeyError, useSecurityKeys } from '../lib/securityKey';
 import { slowestWaiting, waitingText } from '../lib/confirmations';
 import { fiatEditable, fiatToZatoshi, formatFiat } from '../lib/price';
 import {
@@ -74,7 +77,7 @@ type Step =
   | { name: 'contacts' }
   | { name: 'review'; review: Review }
   | { name: 'sent'; txId: string }
-  | { name: 'saved'; message: string };
+  | { name: 'saved'; message: string; detail: string | null };
 
 export function SendScreen({
   visible,
@@ -99,6 +102,10 @@ export function SendScreen({
   const [fiatMode, setFiatMode] = useState(false);
   const contacts = useContacts();
   const confirming = confirmingZatoshi(wallet);
+  // N1: with Tor wanted, nothing is released until Tor is connected.
+  const torWanted = useTorWanted();
+  const nu7Paused = nu7Pauses(wallet.networkHeight);
+  const torBlocked = nu7Paused || torBlocksRelease(torWanted, wallet.tor);
   const [newName, setNewName] = useState('');
   const saveContact = async () => {
     setBusy(true);
@@ -158,8 +165,12 @@ export function SendScreen({
   const onScanned = (text: string) => {
     // The camera can report the same code several times in a row.
     if (step.name !== 'scan') return;
-    const scanned = parseScanned(text);
-    if (scanned == null) {
+    const scanned = isMultiRecipient(text) ? null : parseScanned(text);
+    if (isMultiRecipient(text)) {
+      setError(
+        'This payment request asks to pay several people at once. Zecky releases to one address at a time, so nothing was filled in.',
+      );
+    } else if (scanned == null) {
       setError('That code is not a Zcash address.');
     } else {
       setError(null);
@@ -248,7 +259,12 @@ export function SendScreen({
     }
   };
 
+  // Self-audit F1: a second tap before the button shows busy must never
+  // start a second send. Set synchronously, before anything else.
+  const sendingNow = useRef(false);
   const send = async (r: Review) => {
+    if (sendingNow.current) return;
+    sendingNow.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -256,17 +272,23 @@ export function SendScreen({
       setStep({ name: 'sent', txId });
       onSent(txId, r.zatoshi);
     } catch (e) {
+      // Closing the security key sheet: nothing was made, stay on the
+      // receipt without an error.
+      if (e instanceof SecurityKeyError && e.reason === 'cancelled') return;
       const message = e instanceof Error ? e.message : String(e);
       // Created but not delivered: leave the review screen, so there is no
       // "Send now" left to tap a second time.
-      if (isPaymentSaved(e)) setStep({ name: 'saved', message });
-      else setError(message);
+      if (isPaymentSaved(e)) {
+        setStep({ name: 'saved', message, detail: savedDetail(e) });
+      } else setError(message);
     } finally {
+      sendingNow.current = false;
       setBusy(false);
     }
   };
 
   const waiting = waitingPayments(wallet.transactions).length;
+  const keyNeeded = useSecurityKeys().keys.length > 0;
 
   // On "Released", the open lock closes again after a moment.
   const [closedAgain, setClosedAgain] = useState(false);
@@ -483,6 +505,14 @@ export function SendScreen({
                 </Pressable>
               )}
 
+              {nu7Paused && <Text style={styles.error}>{NU7_PAUSED}</Text>}
+              {torBlocked && !nu7Paused && (
+                <Text style={styles.error}>
+                  Tor is not connected yet. Releasing waits until it is, so your
+                  internet address stays hidden. Or switch Tor off under
+                  Settings › Network.
+                </Text>
+              )}
               {error != null && <Text style={styles.error}>{error}</Text>}
             </ScrollView>
             <BrassButton
@@ -490,6 +520,7 @@ export function SendScreen({
               icon="arrowUp"
               onPress={review}
               busy={busy}
+              disabled={torBlocked}
             />
             <Pressable
               accessibilityRole="button"
@@ -677,11 +708,19 @@ export function SendScreen({
               )}
               {error != null && <Text style={styles.error}>{error}</Text>}
             </ScrollView>
+            {keyNeeded && (
+              <Text style={styles.keyHint}>
+                Tapping your key sends it. Check everything above first.
+              </Text>
+            )}
             <BrassButton
-              label={`Release ${formatExact(step.review.zatoshi, unit)}`}
+              label={`Release ${formatExact(step.review.zatoshi, unit)}${
+                keyNeeded ? ' with your key' : ''
+              }`}
               icon="arrowUp"
               onPress={() => send(step.review)}
               busy={busy}
+              disabled={torBlocked}
             />
             <View style={styles.gap} />
             <Button
@@ -713,6 +752,11 @@ export function SendScreen({
                 Activity shows it as “Waiting to release”. Do not release it
                 again. You can close this screen.
               </Text>
+              {step.detail != null && (
+                <Text style={[styles.detail, styles.centerText]} selectable>
+                  Technical detail: {step.detail}
+                </Text>
+              )}
             </View>
             <Button label="Done" onPress={onClose} />
           </>
@@ -809,6 +853,13 @@ const useStyles = makeStyles(colors => ({
   scroll: { paddingBottom: space.lg, paddingTop: space.sm },
   center: { flex: 1, justifyContent: 'center' },
   centerText: { textAlign: 'center' },
+  detail: {
+    fontFamily: 'Menlo',
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.textMuted,
+    marginTop: space.md,
+  },
   noTop: { marginTop: 0, marginBottom: space.md },
   formCard: { paddingVertical: space.md },
   fieldHead: {
@@ -1066,4 +1117,11 @@ const useStyles = makeStyles(colors => ({
   rowSmall: { fontSize: 14, lineHeight: 21 },
   rowStrong: { fontFamily: fonts.sansSemiBold, color: colors.gold },
   gap: { height: space.sm },
+  keyHint: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: space.sm,
+  },
 }));

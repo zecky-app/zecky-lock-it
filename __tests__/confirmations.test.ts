@@ -50,6 +50,6 @@ describe('waiting for confirmations', () => {
 
   it('without the latest block it falls back to the plain estimate', () => {
     expect(slowestWaiting([tx(100)], 0)).toBeNull();
-    expect(waitingText(null)).toBe('usable within about 12 minutes');
+    expect(waitingText(null)).toBe('usable within a few minutes');
   });
 });

@@ -80,8 +80,13 @@ test('reads saved servers and drops malformed ones', () => {
     'nonsense',
   ]);
   expect(parseSavedServers(raw)).toEqual([
-    { host: '192.168.1.20', port: 8137, name: 'Rock it at home' },
-    { host: '100.101.102.103', port: 8137, name: 'Rock it' },
+    {
+      host: '192.168.1.20',
+      port: 8137,
+      name: 'Rock it at home',
+      own: false,
+    },
+    { host: '100.101.102.103', port: 8137, name: 'Rock it', own: false },
   ]);
   expect(parseSavedServers('not json')).toEqual([]);
   expect(parseSavedServers(undefined)).toEqual([]);

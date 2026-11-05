@@ -1,6 +1,20 @@
+/** Shown while syncing when the connection to the server broke off. */
+export const SYNC_DROPPED =
+  'The connection to the Zcash server dropped for a moment. Zecky is trying again by itself.';
+/** The same, when it keeps happening for a few minutes. */
+export const SYNC_DROPPED_LONG =
+  'Zecky keeps losing the connection to the Zcash server. It keeps trying; you can also choose another server under Settings › Network.';
+
 // Turns the Zcash engine's technical error text into a sentence that says
 // what happened and what to do. Unknown errors pass through unchanged.
 const RULES: [RegExp, string][] = [
+  [
+    // A block download or server call that broke off while syncing, such as
+    // "LightWalletService.blockStream failed." (first tester, Nov 4). The
+    // engine retries by itself.
+    /blockStream|LightWalletService\.\w+ failed|stream (failed|closed|reset)/i,
+    SYNC_DROPPED,
+  ],
   [
     /belongs to another wallet/i,
     'This device still holds data from an earlier wallet. Delete the Zecky app, install it again, and your wallet will open cleanly.',
@@ -46,15 +60,33 @@ export function describeError(e: unknown): string {
   return friendlyError(e instanceof Error ? e.message : String(e));
 }
 
+export const SERVER_CHANGED_SEND =
+  'The server changed while you were tapping your key. Nothing was released. Try again.';
+export const NU7_PAUSED =
+  'Releasing is paused for the Zcash network upgrade (NU7) until Zecky is updated. Your Zcash is safe, and you can still receive.';
+export const TOR_NOT_READY =
+  'Tor is not connected yet, so nothing was released. Wait until Tor is on, or switch Tor off under Settings › Network.';
 export const OFFLINE_SEND = 'No internet connection. Nothing was released.';
 export const SEND_PENDING =
-  'No connection to the Zcash network right now. Your release is saved and goes out by itself as soon as the connection is back. Do not release it again.';
+  'It could not be delivered to the Zcash network yet. Zecky keeps trying by itself every few minutes. Do not release it again.';
 export const SEND_REJECTED =
   'The network has not accepted this release yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves the lock. Do not release it again.';
 
 /** An error for a payment that was created and will still go out by itself. */
-export function paymentSavedError(message: string): Error {
-  return Object.assign(new Error(message), { paymentSaved: true });
+export function paymentSavedError(
+  message: string,
+  detail?: string | null,
+): Error {
+  return Object.assign(new Error(message), {
+    paymentSaved: true,
+    detail: detail ?? null,
+  });
+}
+
+/** The engine's reason attached to a saved payment, if any. */
+export function savedDetail(e: unknown): string | null {
+  const detail = (e as { detail?: unknown } | null)?.detail;
+  return typeof detail === 'string' && detail !== '' ? detail : null;
 }
 
 export function isPaymentSaved(e: unknown): boolean {

@@ -29,6 +29,20 @@ import {
 import { confirmOwner } from '../lib/deviceAuth';
 import { asksAt, setAskAt, useAskWhen } from '../lib/askWhen';
 import { needsOwner } from '../lib/lockRules';
+import { PHRASE_KEY_MIN_KEYS, removalEndsAt } from '../lib/keyRules';
+import {
+  SecurityKeyError,
+  addSecurityKey,
+  cancelKeyRemoval,
+  checkSecurityKey,
+  finishKeyRemovalIfDue,
+  loadSecurityKeyState,
+  removeSecurityKey,
+  securityKeysSupported,
+  setPhraseNeedsKey,
+  startKeyRemoval,
+  useSecurityKeys,
+} from '../lib/securityKey';
 import {
   OPEN_WAITS,
   OpenWait,
@@ -78,8 +92,10 @@ interface Props {
   walletAddress: string | null;
   /** Called after the wallet has been erased from this phone. */
   onErased: () => void;
+  /** Latest block height while fully synced (0 otherwise), for the 48-hour key removal. */
+  networkHeight: number;
   /** Open straight on this page instead of the menu. */
-  startOn?: 'server' | 'phrase';
+  startOn?: 'server' | 'phrase' | 'display' | 'seckey';
   onClose: () => void;
 }
 
@@ -89,6 +105,8 @@ type Page =
   | 'display'
   | 'security'
   | 'keys'
+  | 'openwait'
+  | 'seckey'
   | 'phrase'
   | 'viewkey'
   | 'erase'
@@ -113,6 +131,27 @@ const WAIT_LABELS: Record<OpenWait, string> = {
   0: 'Don’t ask',
 };
 
+const WAIT_SHORT: Record<OpenWait, string> = {
+  10: 'Wait 10 s',
+  5: 'Wait 5 s',
+  3: 'Wait 3 s',
+  0: 'Off',
+};
+
+const usDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+const usDateTime = (date: Date) =>
+  date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
 const THEME_LABELS = { dark: 'Dark', light: 'Light', auto: 'Auto' } as const;
 
 const TITLES: Record<Page, string> = {
@@ -121,6 +160,8 @@ const TITLES: Record<Page, string> = {
   display: 'Display',
   security: 'Security',
   keys: 'Keys to the lock',
+  openwait: 'Really open the lock?',
+  seckey: 'Security key',
   phrase: 'Recovery phrase',
   viewkey: 'Viewing key',
   erase: 'Erase wallet',
@@ -135,6 +176,8 @@ const SUBTITLES: Record<Page, string> = {
   display: 'How amounts and colors look.',
   security: 'Who can open Zecky and the lock.',
   keys: 'Everything that lets you in or opens the lock, in one place.',
+  openwait: 'A question and a short wait, for when someone is rushing you.',
+  seckey: 'A key you tap against your iPhone before releasing.',
   phrase: 'The 24 words that restore your Zcash on any phone.',
   viewkey: 'See-only access, for an accountant or a watch-only device.',
   erase: 'Remove the wallet from this iPhone.',
@@ -204,6 +247,59 @@ function Line(props: { label: string; value: string }) {
   );
 }
 
+/** One of the numbered keys on the Keys to the lock overview. */
+function KeyRow(props: {
+  number: number;
+  label: string;
+  hint: string;
+  last?: boolean;
+  /** A switch, or else a value with › that opens its page. */
+  toggle?: { value: boolean; onChange: (next: boolean) => void };
+  value?: string;
+  onPress?: () => void;
+}) {
+  const styles = useStyles();
+  const colors = useColors();
+  const content = (
+    <>
+      <View style={styles.keyNumber}>
+        <Text style={styles.keyNumberText}>{props.number}</Text>
+      </View>
+      <View style={styles.lineText}>
+        <Text style={styles.lineLabel}>{props.label}</Text>
+        <Text style={styles.lineHint}>{props.hint}</Text>
+      </View>
+      {props.toggle != null ? (
+        <Switch
+          accessibilityLabel={props.label}
+          value={props.toggle.value}
+          onValueChange={props.toggle.onChange}
+          trackColor={{ true: colors.gold, false: colors.line }}
+          ios_backgroundColor={colors.line}
+        />
+      ) : (
+        <>
+          <Text style={styles.keyValue} numberOfLines={1}>
+            {props.value}
+          </Text>
+          <Text style={styles.chevron}>›</Text>
+        </>
+      )}
+    </>
+  );
+  const style = [styles.line, props.last !== true && styles.divider];
+  if (props.toggle != null) return <View style={style}>{content}</View>;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={props.onPress}
+      style={({ pressed }) => [...style, pressed && styles.pressed]}
+    >
+      {content}
+    </Pressable>
+  );
+}
+
 export function SettingsScreen({
   visible,
   unit,
@@ -215,6 +311,7 @@ export function SettingsScreen({
   birthdayHeight,
   tor,
   pools,
+  networkHeight,
   startOn,
   walletAddress,
   onErased,
@@ -305,6 +402,48 @@ export function SettingsScreen({
         .catch(() => setHasPasscode(true));
     }
   }, [page]);
+  // --- Security keys ---
+  const keysState = useSecurityKeys();
+  const keyCount = keysState.keys.length;
+  const [keysSupported, setKeysSupported] = useState(true);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyMessage, setKeyMessage] = useState<{
+    text: string;
+    error: boolean;
+  } | null>(null);
+  const [phraseWarn, setPhraseWarn] = useState(false);
+  useEffect(() => {
+    setKeyMessage(null);
+    setPhraseWarn(false);
+    if (page === 'seckey') {
+      securityKeysSupported().then(setKeysSupported);
+    }
+  }, [page, visible]);
+  useEffect(() => {
+    if ((page === 'keys' || page === 'seckey') && networkHeight > 0) {
+      finishKeyRemovalIfDue(networkHeight).catch(() => false);
+    }
+  }, [page, networkHeight]);
+  /** Runs a key action and turns its outcome into a short line. */
+  const keyAction = async (action: () => Promise<unknown>, done: string) => {
+    setKeyMessage(null);
+    setKeyBusy(true);
+    try {
+      await action();
+      setKeyMessage({ text: done, error: false });
+    } catch (e) {
+      if (e instanceof SecurityKeyError && e.reason === 'cancelled') return;
+      setKeyMessage({
+        text: e instanceof Error ? e.message : String(e),
+        error: true,
+      });
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+  const removalEnd =
+    keysState.removal != null ? removalEndsAt(keysState.removal) : null;
+
   const themeMode = useThemeMode();
   const server = useServer();
   const torWanted = useTorWanted();
@@ -401,6 +540,25 @@ export function SettingsScreen({
   };
 
   const reveal = async () => {
+    // With "Also ask the key" on, the words also need a tap of a key. Read
+    // fresh, and show nothing when the setting cannot be read (re-check R2).
+    let needsKey: boolean;
+    try {
+      needsKey = (await loadSecurityKeyState()).phraseNeedsKey;
+    } catch (e) {
+      setPhraseError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    if (needsKey) {
+      try {
+        await checkSecurityKey();
+      } catch (e) {
+        if (!(e instanceof SecurityKeyError && e.reason === 'cancelled')) {
+          setPhraseError(e instanceof Error ? e.message : String(e));
+        }
+        return;
+      }
+    }
     try {
       const stored = await loadWallet();
       if (stored == null) throw new Error('No wallet found on this phone.');
@@ -662,7 +820,10 @@ export function SettingsScreen({
                 <MenuRow
                   icon="lock"
                   label="Keys to the lock"
-                  value={pinEnabled ? 'Zecky code' : 'Face ID'}
+                  value={
+                    (pinEnabled ? 'Zecky code' : 'Face ID') +
+                    (keyCount > 0 ? ' + key' : '')
+                  }
                   onPress={() => setPage('keys')}
                 />
                 <MenuRow
@@ -697,6 +858,68 @@ export function SettingsScreen({
               <Text style={styles.info}>
                 Making it easier always asks that it is you first.
               </Text>
+
+              <Text style={styles.section}>Your keys, in order</Text>
+              <View style={styles.card}>
+                <KeyRow
+                  number={1}
+                  label="Opening Zecky"
+                  hint={
+                    askStart ? 'Asks that it is you' : 'Opens straight away'
+                  }
+                  toggle={{
+                    value: askStart,
+                    onChange: next =>
+                      needsOwner({ kind: 'ask', from: askStart, to: next })
+                        ? whenOwner(() => setAskAt('start', next))
+                        : setAskAt('start', next),
+                  }}
+                />
+                <KeyRow
+                  number={2}
+                  label="Opening the lock"
+                  hint={
+                    askOpenLock
+                      ? 'Asks that it is you'
+                      : 'No check that it is you'
+                  }
+                  toggle={{
+                    value: askOpenLock,
+                    onChange: next =>
+                      needsOwner({ kind: 'ask', from: askOpenLock, to: next })
+                        ? whenOwner(() => setAskAt('openLock', next))
+                        : setAskAt('openLock', next),
+                  }}
+                />
+                <KeyRow
+                  number={3}
+                  label="Really open the lock?"
+                  hint="A question and a short wait"
+                  value={WAIT_SHORT[openWait]}
+                  onPress={() => setPage('openwait')}
+                />
+                <KeyRow
+                  number={4}
+                  label="Security key"
+                  hint="Tapped before releasing"
+                  value={
+                    keysState.removal != null
+                      ? 'Removing'
+                      : keyCount === 0
+                      ? 'Not added'
+                      : keyCount === 1
+                      ? '1 key'
+                      : `${keyCount} keys`
+                  }
+                  onPress={() => setPage('seckey')}
+                  last
+                />
+              </View>
+              {openWait === 0 && !askOpenLock && (
+                <Text style={styles.info}>
+                  Right now one tap opens the lock.
+                </Text>
+              )}
 
               <Text style={styles.section}>Check it’s you with</Text>
               <View style={styles.card}>
@@ -762,59 +985,18 @@ export function SettingsScreen({
                 </Text>
               )}
 
-              <Text style={styles.section}>Ask when</Text>
-              <View style={styles.card}>
-                <View style={[styles.line, styles.divider]}>
-                  <Text style={[styles.lineLabel, styles.menuLabel]}>
-                    Opening Zecky
-                  </Text>
-                  <Switch
-                    value={askStart}
-                    onValueChange={next =>
-                      needsOwner({ kind: 'ask', from: askStart, to: next })
-                        ? whenOwner(() => setAskAt('start', next))
-                        : setAskAt('start', next)
-                    }
-                    trackColor={{ true: colors.gold, false: colors.line }}
-                    ios_backgroundColor={colors.line}
-                  />
-                </View>
-                <View style={[styles.line, styles.divider]}>
-                  <Text style={[styles.lineLabel, styles.menuLabel]}>
-                    Opening the lock
-                  </Text>
-                  <Switch
-                    value={askOpenLock}
-                    onValueChange={next =>
-                      needsOwner({ kind: 'ask', from: askOpenLock, to: next })
-                        ? whenOwner(() => setAskAt('openLock', next))
-                        : setAskAt('openLock', next)
-                    }
-                    trackColor={{ true: colors.gold, false: colors.line }}
-                    ios_backgroundColor={colors.line}
-                  />
-                </View>
-                <View style={[styles.line, styles.divider]}>
-                  <Text style={[styles.lineLabel, styles.menuLabel]}>
-                    Showing the recovery phrase
-                  </Text>
-                  <Text style={styles.lineValue}>Always</Text>
-                </View>
-                <View style={[styles.line, styles.divider]}>
-                  <Text style={[styles.lineLabel, styles.menuLabel]}>
-                    Showing the viewing key
-                  </Text>
-                  <Text style={styles.lineValue}>Always</Text>
-                </View>
-                <View style={styles.line}>
-                  <Text style={[styles.lineLabel, styles.menuLabel]}>
-                    Erasing the wallet
-                  </Text>
-                  <Text style={styles.lineValue}>Always</Text>
-                </View>
-              </View>
+              <Text style={styles.info}>
+                Always asked: showing the recovery phrase, showing the viewing
+                key and erasing the wallet.
+                {keysState.phraseNeedsKey
+                  ? ' The recovery phrase also asks your security key.'
+                  : ''}
+              </Text>
+            </>
+          )}
 
-              <Text style={styles.section}>Really open the lock?</Text>
+          {page === 'openwait' && flow == null && (
+            <>
               <View style={styles.card}>
                 {OPEN_WAITS.map((w, i) => (
                   <Pressable
@@ -844,6 +1026,252 @@ export function SettingsScreen({
                   ? ' Right now one tap opens the lock.'
                   : ''}
               </Text>
+            </>
+          )}
+
+          {page === 'seckey' && flow == null && (
+            <>
+              {!keysSupported ? (
+                <Text style={styles.info}>
+                  This iPhone cannot use security keys.
+                </Text>
+              ) : (
+                <>
+                  {keyCount === 0 && (
+                    <Text style={styles.info}>
+                      Tap a security key, such as a YubiKey, against the top of
+                      your iPhone. From then on, releasing Zcash asks that key
+                      too. Nothing about you is stored on the key, and nothing
+                      goes over the internet.
+                    </Text>
+                  )}
+
+                  {keysState.removal != null && removalEnd != null && (
+                    <View style={[styles.card, styles.cardPad]}>
+                      <Text style={styles.lineLabel}>Removing all keys</Text>
+                      <Text style={styles.lineHint}>
+                        After {usDateTime(removalEnd)}, once the Zcash network
+                        also shows 48 hours. Until then, your keys are still
+                        asked.
+                      </Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        hitSlop={10}
+                        disabled={keyBusy}
+                        onPress={() =>
+                          keyAction(cancelKeyRemoval, 'Removal cancelled ✓')
+                        }
+                        style={styles.inlineLink}
+                      >
+                        <Text style={styles.inlineLinkText}>
+                          Cancel with a key
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+
+                  {keyCount > 0 && (
+                    <View style={styles.card}>
+                      {keysState.keys.map((k, i) => (
+                        <View
+                          key={k.id}
+                          style={[
+                            styles.line,
+                            i < keyCount - 1 && styles.divider,
+                          ]}
+                        >
+                          <View style={styles.lineText}>
+                            <Text style={styles.lineLabel}>
+                              {k.role === 'backup'
+                                ? 'Backup key'
+                                : 'Security key'}
+                            </Text>
+                            <Text style={styles.lineHint}>
+                              Added {usDate(k.added)}
+                            </Text>
+                          </View>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove ${
+                              k.role === 'backup'
+                                ? 'backup key'
+                                : 'security key'
+                            }`}
+                            hitSlop={10}
+                            disabled={keyBusy}
+                            onPress={() =>
+                              keyAction(
+                                () => removeSecurityKey(k.id),
+                                'Key removed ✓',
+                              )
+                            }
+                          >
+                            <Text style={styles.inlineLinkText}>Remove</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  {keyCount === 1 && keysState.removal == null && (
+                    <Text style={styles.info}>
+                      Add a backup key and keep it in another place. Without
+                      one, a lost key means a 48-hour wait or restoring from
+                      your 24 words.
+                    </Text>
+                  )}
+
+                  {keyMessage != null && (
+                    <Text
+                      style={keyMessage.error ? styles.warning : styles.info}
+                    >
+                      {keyMessage.text}
+                    </Text>
+                  )}
+
+                  {keysState.removal == null && (
+                    <View style={styles.reveal}>
+                      <Button
+                        label={
+                          keyCount === 0
+                            ? 'Add a security key'
+                            : keyCount === 1
+                            ? 'Add a backup key'
+                            : 'Add another key'
+                        }
+                        variant={keyCount < 2 ? 'primary' : 'quiet'}
+                        busy={keyBusy}
+                        onPress={() =>
+                          keyCount === 0
+                            ? whenOwner(() =>
+                                keyAction(
+                                  () => addSecurityKey('main'),
+                                  'Key added ✓',
+                                ),
+                              )
+                            : keyAction(
+                                () => addSecurityKey('backup'),
+                                'Backup key added ✓',
+                              )
+                        }
+                      />
+                      {keyCount > 0 && (
+                        <Text style={[styles.lineHint, styles.centered]}>
+                          First tap one of your keys, then the new one.
+                        </Text>
+                      )}
+                    </View>
+                  )}
+
+                  {keyCount > 0 && (
+                    <Button
+                      label="Test key"
+                      variant="quiet"
+                      disabled={keyBusy}
+                      onPress={() =>
+                        keyAction(checkSecurityKey, 'Your key works ✓')
+                      }
+                    />
+                  )}
+
+                  {keyCount > 0 && !phraseWarn && (
+                    <>
+                      <Text style={styles.section}>Recovery phrase</Text>
+                      <View style={styles.card}>
+                        <View style={styles.line}>
+                          <View style={styles.lineText}>
+                            <Text style={styles.lineLabel}>
+                              Also ask the key to show the recovery phrase
+                            </Text>
+                            <Text style={styles.lineHint}>
+                              {keysState.phraseNeedsKey
+                                ? 'On: the words also need a key.'
+                                : keyCount < PHRASE_KEY_MIN_KEYS
+                                ? 'Needs a backup key first.'
+                                : 'Off: Face ID or your code is enough.'}
+                            </Text>
+                          </View>
+                          <Switch
+                            accessibilityLabel="Also ask the key to show the recovery phrase"
+                            value={keysState.phraseNeedsKey}
+                            disabled={
+                              keyBusy ||
+                              (!keysState.phraseNeedsKey &&
+                                keyCount < PHRASE_KEY_MIN_KEYS)
+                            }
+                            onValueChange={next =>
+                              next
+                                ? setPhraseWarn(true)
+                                : keyAction(
+                                    () => setPhraseNeedsKey(false),
+                                    'The recovery phrase no longer asks a key.',
+                                  )
+                            }
+                            trackColor={{
+                              true: colors.gold,
+                              false: colors.line,
+                            }}
+                            ios_backgroundColor={colors.line}
+                          />
+                        </View>
+                      </View>
+                    </>
+                  )}
+
+                  {phraseWarn && (
+                    <View
+                      style={[styles.card, styles.dangerCard, styles.cardPad]}
+                    >
+                      <Text style={styles.lineLabel}>
+                        Keep your 24 words on paper
+                      </Text>
+                      <Text style={styles.lineHint}>
+                        If you lose all your keys and the paper, your Zcash can
+                        no longer be recovered. The 48-hour removal still works
+                        while you have this iPhone.
+                      </Text>
+                      <View style={styles.reveal}>
+                        <Button
+                          label="Turn on"
+                          onPress={() => {
+                            setPhraseWarn(false);
+                            keyAction(
+                              () => setPhraseNeedsKey(true),
+                              'The recovery phrase now also asks a key ✓',
+                            );
+                          }}
+                        />
+                        <Button
+                          label="Cancel"
+                          variant="back"
+                          onPress={() => setPhraseWarn(false)}
+                        />
+                      </View>
+                    </View>
+                  )}
+
+                  {keyCount > 0 && keysState.removal == null && (
+                    <Pressable
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      disabled={keyBusy}
+                      onPress={() =>
+                        whenOwner(() =>
+                          keyAction(
+                            () => startKeyRemoval(networkHeight),
+                            'Removal started. Your keys are still asked for 48 hours.',
+                          ),
+                        )
+                      }
+                      style={[styles.inlineLink, styles.lostLink]}
+                    >
+                      <Text style={styles.lostLinkText}>
+                        Lost your keys? Remove them after 48 hours
+                      </Text>
+                    </Pressable>
+                  )}
+                </>
+              )}
             </>
           )}
 
@@ -1031,6 +1459,8 @@ export function SettingsScreen({
                 page === 'keys'
               ) {
                 setPage('security');
+              } else if (page === 'openwait' || page === 'seckey') {
+                setPage('keys');
               } else setPage('menu');
             }}
           />
@@ -1177,6 +1607,36 @@ const useStyles = makeStyles(colors => ({
     marginTop: 2,
   },
   check: { fontFamily: fonts.sansSemiBold, fontSize: 17, color: colors.gold },
+  keyNumber: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: colors.gold + '88',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  keyNumberText: {
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 13,
+    color: colors.gold,
+  },
+  keyValue: {
+    fontFamily: fonts.sans,
+    fontSize: 15,
+    color: colors.textMuted,
+    maxWidth: 110,
+    textAlign: 'right',
+  },
+  centered: { textAlign: 'center', marginTop: space.sm },
+  lostLink: { marginTop: space.lg },
+  lostLinkText: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+    textDecorationLine: 'underline',
+  },
   inlineLink: { alignSelf: 'flex-start', marginTop: space.sm, padding: 4 },
   inlineLinkText: {
     fontFamily: fonts.sansMedium,

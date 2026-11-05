@@ -56,26 +56,87 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       in: window,
       launchOptions: nil
     )
+
+    excludeWalletFilesFromBackup()
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(captureChanged),
+      name: UIScreen.capturedDidChangeNotification, object: nil)
+    captureChanged()
+  }
+
+  // Self-audit D2: the wallet engine keeps its database and caches in
+  // Documents and creates new files there while it runs. Excluding the
+  // whole folder keeps all of them, present and future, out of iCloud and
+  // computer backups. Zecky keeps nothing else in Documents.
+  private func excludeWalletFilesFromBackup() {
+    guard var documents = FileManager.default.urls(
+      for: .documentDirectory, in: .userDomainMask).first
+    else { return }
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? documents.setResourceValues(values)
+  }
+
+  // Self-audit K2: while the screen is recorded or mirrored (AirPlay, a
+  // cable), Zecky hides behind the lock, so the 24 words and balances never
+  // end up in a recording or on another screen.
+  //
+  // Re-check R9: both covers live in their own window above everything
+  // (sheets, alerts), marked modal for VoiceOver, so nothing behind them
+  // can be read out, tapped or opened on top of them.
+  private var captureWindow: UIWindow?
+  private var privacyWindow: UIWindow?
+
+  @objc private func captureChanged() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let window = self.window else { return }
+      let captured = window.windowScene?.screen.isCaptured ?? false
+      if captured, self.captureWindow == nil {
+        window.endEditing(true)
+        self.captureWindow = self.coverWindow(
+          caption: "Hidden while the screen is recorded or mirrored.")
+      } else if !captured {
+        self.captureWindow?.isHidden = true
+        self.captureWindow = nil
+      }
+    }
+  }
+
+  /// A window over everything, showing the lock.
+  private func coverWindow(caption: String?) -> UIWindow? {
+    guard let scene = window?.windowScene else { return nil }
+    let cover = UIWindow(windowScene: scene)
+    cover.windowLevel = .alert + 1
+    let controller = UIViewController()
+    let view = coverView(bounds: scene.coordinateSpace.bounds, caption: caption)
+    view.accessibilityViewIsModal = true
+    view.isAccessibilityElement = true
+    view.accessibilityLabel = caption ?? "Zecky Lock it"
+    controller.view = view
+    cover.rootViewController = controller
+    cover.isHidden = false
+    return cover
+  }
+
+  private func coverView(bounds: CGRect, caption: String?) -> UIView {
+    let cover = UIView(frame: bounds)
+    cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    cover.backgroundColor = UIColor(red: 0.078, green: 0.086, blue: 0.110, alpha: 1)
+    cover.addSubview(privacyMark(in: cover.bounds, caption: caption))
+    return cover
   }
 
   // Privacy cover: iOS photographs the app for the app switcher when it
-  // leaves the foreground. Covering the window first keeps balances,
+  // leaves the foreground. Covering everything first keeps balances,
   // addresses and open sheets out of that picture.
-  private let privacyCoverTag = 947_101
-
   func sceneWillResignActive(_ scene: UIScene) {
-    guard let window = window, window.viewWithTag(privacyCoverTag) == nil else { return }
-    let cover = UIView(frame: window.bounds)
-    cover.tag = privacyCoverTag
-    cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    cover.backgroundColor = UIColor(red: 0.078, green: 0.086, blue: 0.110, alpha: 1)
-    cover.addSubview(privacyMark(in: cover.bounds))
-    window.addSubview(cover)
+    guard privacyWindow == nil else { return }
+    privacyWindow = coverWindow(caption: nil)
   }
 
   /// The closed Zecky lock with "ZECKY Lock it" under it, centred: what the
   /// app switcher shows instead of the app.
-  private func privacyMark(in bounds: CGRect) -> UIView {
+  private func privacyMark(in bounds: CGRect, caption: String?) -> UIView {
     let lock = UIImageView(image: UIImage(named: "CoverLock"))
     lock.contentMode = .scaleAspectFit
     lock.translatesAutoresizingMaskIntoConstraints = false
@@ -103,7 +164,18 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     wordmark.alignment = .lastBaseline
     wordmark.spacing = 6
 
-    let stack = UIStackView(arrangedSubviews: [lock, wordmark])
+    var parts: [UIView] = [lock, wordmark]
+    if let caption {
+      let note = UILabel()
+      note.text = caption
+      note.font = UIFont(name: "Inter-Regular", size: 13) ?? .systemFont(ofSize: 13)
+      note.textColor = UIColor(white: 0.62, alpha: 1)
+      note.textAlignment = .center
+      note.numberOfLines = 0
+      note.preferredMaxLayoutWidth = 260
+      parts.append(note)
+    }
+    let stack = UIStackView(arrangedSubviews: parts)
     stack.axis = .vertical
     stack.alignment = .center
     stack.spacing = 22
@@ -122,7 +194,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   }
 
   func sceneDidBecomeActive(_ scene: UIScene) {
-    window?.viewWithTag(privacyCoverTag)?.removeFromSuperview()
+    privacyWindow?.isHidden = true
+    privacyWindow = nil
   }
 }
 

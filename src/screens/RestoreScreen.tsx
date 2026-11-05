@@ -80,10 +80,20 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
     (_, i) => FIRST_YEAR + i,
   );
 
+  // Self-audit K4: Zcash wallets use 24 words. A valid 12- or 18-word
+  // phrase from another coin would open an empty wallet, so ask first.
+  const [shortOk, setShortOk] = useState(false);
   const submit = async () => {
     if (!isValidMnemonic(phrase)) {
       setError(
         'That recovery phrase is not valid. Check the spelling and the order of the words.',
+      );
+      return;
+    }
+    if (wordCount !== 24 && !shortOk) {
+      setShortOk(true);
+      setError(
+        `This phrase has ${wordCount} words. Zcash wallets use 24, so this may be a phrase from another coin and open an empty wallet. Tap Restore wallet again to go ahead anyway.`,
       );
       return;
     }
@@ -135,7 +145,10 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
         <TextInput
           style={[styles.input, styles.phrase]}
           value={phrase}
-          onChangeText={setPhrase}
+          onChangeText={text => {
+            setPhrase(text);
+            setShortOk(false);
+          }}
           multiline
           autoCapitalize="none"
           autoCorrect={false}
@@ -148,7 +161,10 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
           placeholderTextColor={colors.goldDim}
           selectionColor={colors.gold}
         />
-        <Text style={styles.hint}>{wordCount} words</Text>
+        <Text style={styles.hint}>
+          {wordCount} words. If you pasted your words, copy something else
+          afterwards.
+        </Text>
 
         <Text style={styles.label}>When was this wallet created?</Text>
         {useBlock ? (

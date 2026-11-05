@@ -1,12 +1,30 @@
 import { useSyncExternalStore } from 'react';
 import { Platform, Settings } from 'react-native';
+import { Server, nodeKind } from './server';
 
 // Whether the user wants Tor. Off by default: it is slower and some
 // networks block it.
 const KEY = 'zecky.tor';
 
-/** What the wallet is actually doing right now. */
-export type TorStatus = 'off' | 'starting' | 'on' | 'failed' | 'unavailable';
+/**
+ * What the wallet is actually doing right now. 'ownNode': Tor is wanted,
+ * but the server is the owner's own node (Rock it), so the wallet talks to
+ * it directly. Tor hides the internet address from the server, and here
+ * the server is yours; a Tor exit could not reach a home or Tailscale
+ * address anyway (self-audit N6).
+ */
+export type TorStatus =
+  | 'off'
+  | 'starting'
+  | 'on'
+  | 'failed'
+  | 'unavailable'
+  | 'ownNode';
+
+/** Whether the wallet itself should run over Tor with this server. */
+export function torForServer(wanted: boolean, server: Server): boolean {
+  return wanted && nodeKind(server) == null;
+}
 
 function load(): boolean {
   try {
@@ -53,4 +71,17 @@ export function useTorWanted(): boolean {
     listeners.add(listener);
     return () => listeners.delete(listener);
   }, getTorWanted);
+}
+
+/**
+ * With Tor wanted, a release or lock-in may only be built once Tor is
+ * connected. When Tor cannot start, the engine stays on a direct
+ * connection, so going ahead would tie the phone's internet address to the
+ * release. Same rule as the price: no direct fallback behind your back.
+ */
+export function torBlocksRelease(
+  torWanted: boolean,
+  status: TorStatus,
+): boolean {
+  return torWanted && status !== 'on' && status !== 'ownNode';
 }

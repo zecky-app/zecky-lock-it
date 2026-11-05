@@ -38,6 +38,6 @@ export const POOLS: {
   {
     key: 'transparent',
     name: 'Transparent',
-    about: 'Your public address: visible to everyone until locked in.',
+    about: 'Your transparent address: visible to everyone until locked in.',
   },
 ];

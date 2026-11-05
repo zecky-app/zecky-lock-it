@@ -54,9 +54,52 @@ export function isHomeNode(server: Server): boolean {
   );
 }
 
+/**
+ * Self-audit N2 and re-check R3/R4: which kind of own node this is.
+ * - 'tailscale': a …ts.net name you added from Rock it's code. Reached over
+ *   TLS for that name, which only your own Tailscale network has, so a
+ *   stranger cannot pose as it.
+ * - 'tailscaleIp': a 100.64/10 address. Usually Tailscale, but mobile
+ *   carriers use the same range, and it goes without TLS: not provably yours.
+ * - 'home': a home-network address (10/8, 172.16/12, 192.168/16, 127/8).
+ *   Other networks use the same numbers, so it cannot be checked either.
+ * A …ts.net name typed by hand is NOT treated as your node: Tailscale
+ * Funnel can publish such names to the whole internet (re-check R3).
+ */
+export type NodeKind = 'tailscale' | 'tailscaleIp' | 'home';
+
+export function nodeKind(server: Server): NodeKind | null {
+  if (server.host.toLowerCase().endsWith('.ts.net')) {
+    return isOwnSaved(server) ? 'tailscale' : null;
+  }
+  if (!isHomeNode(server)) return null;
+  const [a, b] = server.host.split('.').map(Number);
+  return a === 100 && b >= 64 && b <= 127 ? 'tailscaleIp' : 'home';
+}
+
+/** Whether Zecky can tell that this node is really yours. */
+export function nodeVerified(kind: NodeKind | null): boolean {
+  return kind === 'tailscale';
+}
+
+/** "Rock it, home network", "Rock it, Tailscale" or "Rock it, Tailscale IP". */
+export function nodeLabel(kind: NodeKind): string {
+  return kind === 'home'
+    ? 'Rock it, home network'
+    : kind === 'tailscaleIp'
+    ? 'Rock it, Tailscale IP'
+    : 'Rock it, Tailscale';
+}
+
+function isOwnSaved(server: Server): boolean {
+  return getSavedServers().some(s => s.own && sameServer(s, server));
+}
+
 /** A server the user saved, under a name they chose. */
 export interface SavedServer extends Server {
   name: string;
+  /** Added from Rock it's code: the owner's own node (re-check R3). */
+  own: boolean;
 }
 
 /** The name a saved server gets when the user leaves the name empty. */
@@ -82,12 +125,21 @@ export function parseSavedServers(raw: unknown): SavedServer[] {
   const result: SavedServer[] = [];
   for (const item of list) {
     if (item == null || typeof item !== 'object') continue;
-    const { name, address } = item as { name?: unknown; address?: unknown };
+    const { name, address, own } = item as {
+      name?: unknown;
+      address?: unknown;
+      own?: unknown;
+    };
     if (typeof name !== 'string' || typeof address !== 'string') continue;
     const server = parseServer(address);
     if (server == null) continue;
     if (result.some(s => sameServer(s, server))) continue;
-    result.push({ ...server, name: cleanName(name, server) });
+    // Saved before re-check R3 (no "own" yet): a …ts.net name could only
+    // have come from Rock it's code or the owner, so it stays their node.
+    const ownNode =
+      own === true ||
+      (own === undefined && server.host.toLowerCase().endsWith('.ts.net'));
+    result.push({ ...server, name: cleanName(name, server), own: ownNode });
   }
   return result;
 }
@@ -111,7 +163,11 @@ function storeSaved(list: SavedServer[]): void {
     if (Platform.OS === 'ios') {
       Settings.set({
         [SAVED_KEY]: JSON.stringify(
-          list.map(s => ({ name: s.name, address: serverLabel(s) })),
+          list.map(s => ({
+            name: s.name,
+            address: serverLabel(s),
+            own: s.own,
+          })),
         ),
       });
     }
@@ -125,15 +181,24 @@ export function getSavedServers(): SavedServer[] {
   return (saved ??= loadSaved());
 }
 
-/** Saves a server under a name, or renames it if it is already saved. */
-export function saveServer(name: string, server: Server): SavedServer {
+/**
+ * Saves a server under a name, or renames it if it is already saved.
+ * `own` marks it as the owner's own node (from Rock it's code); renaming
+ * keeps what it was.
+ */
+export function saveServer(
+  name: string,
+  server: Server,
+  own?: boolean,
+): SavedServer {
+  const list = getSavedServers();
+  const index = list.findIndex(s => sameServer(s, server));
   const entry: SavedServer = {
     host: server.host,
     port: server.port,
     name: cleanName(name, server),
+    own: own ?? (index !== -1 && list[index].own),
   };
-  const list = getSavedServers();
-  const index = list.findIndex(s => sameServer(s, server));
   storeSaved(
     index === -1
       ? [...list, entry]

@@ -31,7 +31,7 @@ const CHAPTERS: {
   },
   {
     title: 'Keys to the lock',
-    summary: 'One, two or three keys: you choose.',
+    summary: 'Up to four keys: you choose.',
     icon: 'person',
     keys: [
       {
@@ -39,18 +39,27 @@ const CHAPTERS: {
         text: 'Face ID or the iPhone passcode, or your 4-digit Zecky code, each time Zecky opens.',
       },
       {
+        title: 'Opening the lock',
+        text: 'Face ID, the passcode or the Zecky code once more, before the lock opens.',
+      },
+      {
         title: 'Really open the lock?',
         text: 'A question with a tick and a 10, 5 or 3-second wait: a pause for when someone is rushing you.',
       },
       {
-        title: 'It’s you',
-        text: 'Face ID, the passcode or the Zecky code once more, before the lock opens.',
+        title: 'Security key',
+        text: 'A physical key, such as a YubiKey, tapped against your iPhone before each release. Tapping it sends the release.',
       },
     ],
     points: [
-      'Set them in Settings › Security › Keys to the lock. Use all three, or fewer.',
+      'Set them in Settings › Security › Keys to the lock. Use all four, or fewer.',
       'Showing the recovery phrase or the viewing key and erasing the wallet always ask, whatever you choose.',
       'Making any of this easier, or choosing a new Zecky code, first asks that it’s you.',
+      'A security key is checked on this phone against the key Zecky saved when you added it. Nothing goes over the internet, nothing about you is stored on the key, and Zecky does not show in the key’s own list of logins.',
+      'Adding another key, removing one or switching off its other uses first asks one of your keys. Add a backup key and keep it in another place.',
+      'Lost all your keys? Remove them after 48 hours, counted on both the Zcash network and the phone’s clock; tapping a key cancels it. Restoring from your 24 words never asks a key.',
+      'You can also have a key asked before the recovery phrase is shown. Then losing every key and your paper means the Zcash is gone.',
+      'The key guards releasing from this phone. Whoever has your 24 words can still move the Zcash with another wallet, so keep the paper safe.',
       'The Zecky code is a screen lock, not encryption, and a forgotten code can’t be reset. Without an iPhone passcode or a Zecky code there is nothing to ask, so the phrase is not protected.',
     ],
   },
@@ -71,9 +80,9 @@ const CHAPTERS: {
     summary: 'Amounts, senders and addresses stay hidden.',
     icon: 'eye',
     points: [
-      'Lock more uses shielded addresses: the amount, the sender and the receiver are encrypted on the blockchain.',
+      'Lock more uses shielded addresses: the amount, the sender and the receiver are encrypted on the blockchain. A shielded address is safe to share; only your 24 words must stay secret.',
       'Each address is shown until it is paid; then a fresh one appears, so payments can’t be linked. All of them lead to this same lock.',
-      'The public address is for senders who can’t pay a shielded one. Its payments are visible to everyone until you shield them.',
+      'The transparent address is for senders who can’t pay a shielded one. It works like Bitcoin: its payments are visible to everyone until you lock them in.',
       'A viewing key shows everything in this wallet but can’t spend. Sharing it can’t be undone.',
       'Zcash keeps funds in pools. Settings › About shows yours: Ironwood, where new Zcash locks in since NU6.3 (July 2026); Orchard, which Zcash can only leave since then; Sapling; and the public Transparent pool. The oldest pool, Sprout, is closed to new Zcash and not used by Zecky.',
     ],
@@ -85,11 +94,12 @@ const CHAPTERS: {
     points: [
       'Zecky reads the blockchain through a Zcash server. It sees your internet address and that a wallet is syncing, never your balance or shielded addresses, and it can’t move your Zcash.',
       'Pick another server, or your own, under Network. Saved servers and their names stay on this phone.',
-      'Public servers always use an encrypted connection. Your own node (Rock it) on a private address stays inside your home network, or is encrypted by Tailscale.',
+      'Public servers always use an encrypted connection. Your own node (Rock it) on a home-network address stays inside your home network, or is encrypted by Tailscale. Only the Tailscale name (…ts.net) from your Rock it code also proves the node is yours: a home-network address or a Tailscale number cannot be checked, so use those at home only. The status line says which one you are on.',
       'Whether you are online comes from iOS itself. Only with Rock it on mobile data does Zecky ask your node every 15 seconds whether it answers.',
-      'With Tor on, releases, looking up your payments, chain checks and the price go through Tor, which hides your internet address. Downloading blocks stays direct.',
-      'Without Tor, the price comes from a public price service that sees your internet address, never your balance or addresses. Choose None under Display for no price requests.',
-      'A release to a public address is public: its amount and destination.',
+      'With Tor on, releases, looking up your payments, chain checks and the price go through Tor, which hides your internet address. Downloading blocks stays direct. While Tor is still connecting or could not connect, Zecky releases and locks in nothing. If one Tor connection fails, a release is tried again at once through a fresh one.',
+      'With your own node (Rock it), Zecky talks to it directly, also with Tor on: the node is yours, and a Tor connection could not reach a home or Tailscale address. A …ts.net address typed by hand is not counted as your node, so Tor stays on for it. The price still goes through Tor. Your node passes releases on to the Zcash network from your home connection.',
+      'Zecky asks a price service only after you choose a currency under Display. Without Tor that service sees your internet address, never your balance or addresses. Choose None for no price requests.',
+      'A release to a transparent address is public: its amount and destination.',
     ],
   },
   {
@@ -98,7 +108,7 @@ const CHAPTERS: {
     icon: 'arrowDown',
     points: [
       'While Zecky starts, syncs or is offline, it shows the last confirmed balance. The status at the bottom says so.',
-      'New Zcash needs 10 confirmations, about 12 minutes, before it can be used; your own change after a release needs 3, about 4 minutes. It counts in your balance right away, with a note until it is usable. Release shows what can be used now.',
+      'New Zcash needs 10 confirmations before it can be used, and your own change after a release needs 3. Since the NU7 upgrade (November 2026) a block comes every 25 seconds, so that is about 4 minutes and about 1 minute. It counts in your balance right away, with a note until it is usable. Release shows what can be used now.',
       'Each release pays a small network fee, shown on the receipt before you confirm. Zecky adds no fee of its own.',
       'A release can’t be reversed or cancelled.',
       'A payment of 5,000 zats or less costs more in fees to use than it is worth. It shows in Activity but isn’t counted in your balance.',
@@ -109,7 +119,7 @@ const CHAPTERS: {
     summary: 'Where your data lives.',
     icon: 'settings',
     points: [
-      'The recovery phrase, the Zecky code, your contacts, your receive addresses and your last known balance are in the phone’s secure storage, on this device only.',
+      'The recovery phrase, the Zecky code, your security keys’ public keys, your contacts, your receive addresses and your last known balance are in the phone’s secure storage, on this device only.',
       'Your history is kept in a database on this phone, left out of iCloud and computer backups. For a release that isn’t confirmed yet, the time it was sent is kept until it is.',
       'Only Apple’s own keyboard works inside Zecky, so a keyboard from another app can’t record what you type.',
       'Notes on payments show as plain text, and a note with a link gets a warning.',

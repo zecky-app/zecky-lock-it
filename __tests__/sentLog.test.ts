@@ -14,6 +14,7 @@ import {
   pruneSent,
   recordSent,
   sentEntry,
+  detailFrom,
   txIdsFrom,
 } from '../src/lib/sentLog';
 import { friendlyError } from '../src/lib/errors';
@@ -43,4 +44,15 @@ test('no message ever says nothing left the wallet after a send attempt', () => 
     /nothing left your wallet/i,
   );
   expect(friendlyError('Failed to spend')).toMatch(/Check Activity/);
+});
+
+test('the engine reason is kept for Release saved (N6)', () => {
+  expect(detailFrom('txids:ab12 detail:Tor connection failed')).toBe(
+    'Tor connection failed',
+  );
+  expect(detailFrom('txids:ab12,cd34 code 18: bad-txns')).toBe(
+    'code 18: bad-txns',
+  );
+  expect(detailFrom('txids:ab12')).toBeNull();
+  expect(detailFrom('Failed to spend')).toBeNull();
 });

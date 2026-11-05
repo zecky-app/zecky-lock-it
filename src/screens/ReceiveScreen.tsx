@@ -186,7 +186,7 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
           <>
             <ScrollView contentContainerStyle={styles.scroll}>
               <SheetHeader
-                title="Your private addresses"
+                title="Your shielded addresses"
                 subtitle="The number shows how many payments each address has received. Tap one to show it."
               />
               <View style={[card, styles.listCard]}>
@@ -244,11 +244,11 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
               automaticallyAdjustKeyboardInsets
             >
               <SheetHeader
-                title={mode === 'private' ? 'Lock more' : 'Public address'}
+                title={mode === 'private' ? 'Lock more' : 'Transparent address'}
                 subtitle={
                   mode === 'private'
-                    ? 'Send Zcash to this private address. It locks in by itself.'
-                    : 'Only for senders that cannot pay a private address.'
+                    ? 'Your shielded address. Amount and sender stay hidden.'
+                    : 'Visible to everyone, like Bitcoin. Only for senders that cannot pay a shielded address.'
                 }
               />
 
@@ -366,19 +366,23 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
                     </Pressable>
                   </>
                 )}
-                <Text style={styles.linkDot}>·</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  hitSlop={10}
-                  onPress={() =>
-                    setMode(mode === 'private' ? 'public' : 'private')
-                  }
-                >
-                  <Text style={styles.linkLabel}>
-                    {mode === 'private' ? 'Public address' : 'Private address'}
-                  </Text>
-                </Pressable>
               </View>
+              {/* The address switch on its own quiet line, so the links
+                  above stay short. */}
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() =>
+                  setMode(mode === 'private' ? 'public' : 'private')
+                }
+                style={styles.switchLink}
+              >
+                <Text style={styles.switchLabel}>
+                  {mode === 'private'
+                    ? 'Sender can’t pay shielded? Transparent address ›'
+                    : '‹ Back to your shielded address'}
+                </Text>
+              </Pressable>
             </ScrollView>
 
             <BrassButton
@@ -519,6 +523,12 @@ const useStyles = makeStyles(colors => ({
   },
   link: { alignSelf: 'center', marginTop: space.md },
   linkLabel: { fontFamily: fonts.sansMedium, fontSize: 13, color: colors.gold },
+  switchLink: { alignSelf: 'center', marginBottom: space.sm, padding: 2 },
+  switchLabel: {
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
+    color: colors.textMuted,
+  },
   listCard: { paddingVertical: 0 },
   row: {
     flexDirection: 'row',

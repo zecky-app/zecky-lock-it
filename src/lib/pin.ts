@@ -78,8 +78,9 @@ export function lockoutSeconds(failures: number): number {
 
 // --- Wrong-code counting ---
 //
-// The count and the remaining wait live in the Keychain, so deleting and
-// reinstalling the app does not reset them. The wait is counted down only
+// The count and the remaining wait live in the Keychain, so closing and
+// restarting Zecky does not reset them (deleting the app clears them, with
+// the wallet itself; see freshInstall.ts). The wait is counted down only
 // while Zecky is open and in front; it does not read the phone's clock,
 // so changing the date or time cannot skip it.
 
@@ -146,7 +147,9 @@ export function secondsUntilRetry(): number {
 export async function verifyPin(pin: string): Promise<boolean> {
   if (secondsUntilRetry() > 0) return false;
   const entry = await Keychain.getGenericPassword({ service: SERVICE });
-  if (entry === false) return true;
+  // Self-audit F2: no stored code means nothing can match. Fail closed;
+  // callers only ask for a code while one is set.
+  if (entry === false) return false;
   if (hashPin(pin, entry.username) === entry.password) {
     clearFailures();
     return true;

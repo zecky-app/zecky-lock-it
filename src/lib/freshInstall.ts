@@ -14,7 +14,8 @@ import { NETWORK, WALLET_ALIAS } from '../config';
 // Any of Zecky's own settings also means an update, as a second safety net:
 // they live in the same store as the flag and go with the app.
 const KEY = 'zecky.installed';
-const SETTINGS_KEYS = [
+/** Every settings key Zecky writes, except the install flag itself. */
+export const SETTINGS_KEYS = [
   'zecky.phraseUnconfirmed',
   'zecky.server',
   'zecky.savedServers',
@@ -24,6 +25,9 @@ const SETTINGS_KEYS = [
   'zecky.hideAmounts',
   'zecky.currency',
   'zecky.sent',
+  'zecky.openWait',
+  'zecky.ask.start',
+  'zecky.ask.openLock',
 ];
 
 /** Every Keychain item Zecky keeps. Add new ones here and in eraseWallet. */
@@ -36,6 +40,7 @@ export const KEYCHAIN_SERVICES = [
   'app.zecky.lockit.balance',
   'app.zecky.lockit.phrasestate',
   'app.zecky.lockit.owner',
+  'app.zecky.lockit.seckeys',
 ] as const;
 
 /**

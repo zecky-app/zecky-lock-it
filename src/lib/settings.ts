@@ -29,14 +29,24 @@ export function saveHidden(hidden: boolean): void {
 
 const CURRENCY_KEY = 'zecky.currency';
 
-/** The chosen fiat currency, or null when the user turned fiat values off. */
+/**
+ * The chosen fiat currency, or null for none. Self-audit N3: until the
+ * person chooses, there is no currency and so no request to a price
+ * service; Home offers the choice once.
+ */
 export function loadCurrency(): Currency | null {
-  if (Platform.OS !== 'ios') return 'USD';
+  if (Platform.OS !== 'ios') return null;
   const stored = Settings.get(CURRENCY_KEY);
-  if (stored === 'none') return null;
   return (CURRENCIES as readonly string[]).includes(stored)
     ? (stored as Currency)
-    : 'USD';
+    : null;
+}
+
+/** Whether a currency (or None) was ever chosen on this install. */
+export function isCurrencyChosen(): boolean {
+  if (Platform.OS !== 'ios') return true;
+  const stored = Settings.get(CURRENCY_KEY);
+  return typeof stored === 'string' && stored !== '';
 }
 
 export function saveCurrency(currency: Currency | null): void {
@@ -52,7 +62,7 @@ export function resetDisplaySettings(): void {
     Settings.set({
       [UNIT_KEY]: 'ZEC',
       [HIDDEN_KEY]: false,
-      [CURRENCY_KEY]: 'USD',
+      [CURRENCY_KEY]: null,
     });
   } catch {
     // The screens read these again when a wallet opens.

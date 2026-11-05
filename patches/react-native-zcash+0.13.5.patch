@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-zcash/ios/RNZcash.m b/node_modules/react-native-zcash/ios/RNZcash.m
-index b8345ef..81b2a0b 100644
+index b8345ef..52bd87a 100644
 --- a/node_modules/react-native-zcash/ios/RNZcash.m
 +++ b/node_modules/react-native-zcash/ios/RNZcash.m
 @@ -77,6 +77,47 @@ resolver:(RCTPromiseResolveBlock)resolve
@@ -50,19 +50,52 @@ index b8345ef..81b2a0b 100644
  RCT_EXTERN_METHOD(deriveUnifiedAddress:(NSString *)alias
  resolver:(RCTPromiseResolveBlock)resolve
  rejecter:(RCTPromiseRejectBlock)reject
+@@ -98,6 +139,28 @@ RCT_EXTERN_METHOD(ironwoodActivationHeight:(NSString *)networkName
+   rejecter:(RCTPromiseRejectBlock)reject
+ )
+ 
++// Security keys (Zecky addition)
++RCT_EXTERN_METHOD(securityKeySupported:(RCTPromiseResolveBlock)resolve
++  rejecter:(RCTPromiseRejectBlock)reject
++)
++RCT_EXTERN_METHOD(securityKeyRegister:(NSString *)challenge
++  :(NSString *)userId
++  resolver:(RCTPromiseResolveBlock)resolve
++  rejecter:(RCTPromiseRejectBlock)reject
++)
++RCT_EXTERN_METHOD(securityKeyAssert:(NSString *)challenge
++  :(NSArray *)credentialIds
++  resolver:(RCTPromiseResolveBlock)resolve
++  rejecter:(RCTPromiseRejectBlock)reject
++)
++RCT_EXTERN_METHOD(securityKeyVerify:(NSString *)publicKey
++  :(NSString *)authenticatorData
++  :(NSString *)clientDataJSON
++  :(NSString *)signature
++  resolver:(RCTPromiseResolveBlock)resolve
++  rejecter:(RCTPromiseRejectBlock)reject
++)
++
+ // Events
+ RCT_EXTERN_METHOD(supportedEvents)
+ 
 diff --git a/node_modules/react-native-zcash/ios/RNZcash.swift b/node_modules/react-native-zcash/ios/RNZcash.swift
-index 825c463..b9ffacd 100644
+index 825c463..65bfcf2 100644
 --- a/node_modules/react-native-zcash/ios/RNZcash.swift
 +++ b/node_modules/react-native-zcash/ios/RNZcash.swift
-@@ -1,6 +1,7 @@
+@@ -1,7 +1,11 @@
++import AuthenticationServices
  import Combine
++import CryptoKit
  import Foundation
  import MnemonicSwift
 +import Network
  import SwiftProtobuf
++import UIKit
  import os
  
-@@ -23,6 +24,46 @@ actor SynchronizerStore {
+ actor SynchronizerStore {
+@@ -23,6 +27,46 @@ actor SynchronizerStore {
  
  let synchronizerStore = SynchronizerStore()
  
@@ -109,7 +142,7 @@ index 825c463..b9ffacd 100644
  struct ConfirmedTx {
    var minedHeight: Int
    var toAddress: String?
-@@ -34,6 +75,7 @@ struct ConfirmedTx {
+@@ -34,6 +78,7 @@ struct ConfirmedTx {
    var isShielding: Bool
    var isExpired: Bool
    var memos: [String]?
@@ -117,7 +150,7 @@ index 825c463..b9ffacd 100644
    var dictionary: [String: Any?] {
      return [
        "minedHeight": minedHeight,
-@@ -46,6 +88,7 @@ struct ConfirmedTx {
+@@ -46,6 +91,7 @@ struct ConfirmedTx {
        "memos": memos ?? [],
        "isShielding": isShielding,
        "isExpired": isExpired,
@@ -125,7 +158,7 @@ index 825c463..b9ffacd 100644
      ]
    }
    var nsDictionary: NSDictionary {
-@@ -96,7 +139,7 @@ class RNZcash: RCTEventEmitter {
+@@ -96,7 +142,7 @@ class RNZcash: RCTEventEmitter {
    ) {
      Task {
        let network = getNetworkParams(networkName)
@@ -134,7 +167,7 @@ index 825c463..b9ffacd 100644
        let initializer = Initializer(
          cacheDbURL: try! cacheDbURLHelper(alias, network),
          fsBlockDbRoot: try! fsBlockDbRootURLHelper(alias, network),
-@@ -128,8 +171,18 @@ class RNZcash: RCTEventEmitter {
+@@ -128,8 +174,18 @@ class RNZcash: RCTEventEmitter {
              keySource: nil
            )
            try await wallet.synchronizer.start()
@@ -153,7 +186,7 @@ index 825c463..b9ffacd 100644
            wallet.accountUUID = accountUUID
            wallet.subscribe()
            await synchronizerStore.set(wallet, for: alias)
-@@ -185,7 +238,7 @@ class RNZcash: RCTEventEmitter {
+@@ -185,7 +241,7 @@ class RNZcash: RCTEventEmitter {
    ) {
      Task {
        do {
@@ -162,7 +195,7 @@ index 825c463..b9ffacd 100644
          let lightwalletd: LightWalletService = LightWalletGRPCService(endpoint: endpoint)
          let height = try await lightwalletd.latestBlockHeight(mode: ServiceMode.direct)
          await lightwalletd.closeConnections()
-@@ -301,21 +354,35 @@ class RNZcash: RCTEventEmitter {
+@@ -301,23 +357,93 @@ class RNZcash: RCTEventEmitter {
            )
  
            var lastTxid = ""  // The last transfer is the most relevant to the user
@@ -172,12 +205,17 @@ index 825c463..b9ffacd 100644
 +          // sent", so it is reported with its own code and the txid.
 +          var undelivered: [String] = []
 +          var rejected: String?
++          // Zecky (self-audit N6): keep the engine's own reason, so a release
++          // that could not be delivered says why. It names the failure, never
++          // keys or the phrase.
++          var reason: String?
            for try await tx in transactions {
              switch tx {
 -            case .grpcFailure(_, let error):
 -              throw error
-+            case .grpcFailure(let txId, _):
++            case .grpcFailure(let txId, let error):
 +              undelivered.append(txId.toHexStringTxId())
++              reason = String(String(describing: error).prefix(400))
              case .success(let txId):
                lastTxid = txId.toHexStringTxId()
                continue
@@ -193,21 +231,74 @@ index 825c463..b9ffacd 100644
 +              rejected = "code \(code): \(description)"
 +            case .notAttempted(let txId):
 +              undelivered.append(txId.toHexStringTxId())
++              if reason == nil { reason = "not attempted" }
 +            }
 +          }
 +
++          // Zecky (self-audit N6): over Tor, one exit can fail (for example
++          // its name lookup), and the engine's own retry only comes minutes
++          // later. The failed connection is dropped, so trying again now goes
++          // out through a fresh one. Up to twice, a few seconds apart; only
++          // for a connection failure, never for a rejection by the server.
++          if rejected == nil, !undelivered.isEmpty,
++            await wallet.synchronizer.sdkFlags.torEnabled
++          {
++            for _ in 0..<2 where !undelivered.isEmpty {
++              try? await Task.sleep(nanoseconds: 3_000_000_000)
++              let all = (try? await wallet.synchronizer.allTransactions()) ?? []
++              // In the proposal's own order, so a step that spends an
++              // earlier one never goes first (re-check R5).
++              var byId: [String: ZcashTransaction.Overview] = [:]
++              for overview in all where byId[overview.rawID.toHexStringTxId()] == nil {
++                byId[overview.rawID.toHexStringTxId()] = overview
++              }
++              let waiting = undelivered.compactMap { byId[$0] }
++              if waiting.count != undelivered.count { break }
++              var stillUndelivered: [String] = []
++              do {
++                for try await result in wallet.synchronizer.submitTransactions(waiting) {
++                  switch result {
++                  case .success(let txId):
++                    lastTxid = txId.toHexStringTxId()
++                  case .grpcFailure(let txId, let error):
++                    stillUndelivered.append(txId.toHexStringTxId())
++                    reason = String(String(describing: error).prefix(400))
++                  case .submitFailure(let txId, let code, let description):
++                    // The first try may have reached the server after all:
++                    // "already in the mempool / known / in a block" means
++                    // it went out (re-check R5).
++                    if description.lowercased().contains("already") {
++                      lastTxid = txId.toHexStringTxId()
++                    } else {
++                      stillUndelivered.append(txId.toHexStringTxId())
++                      rejected = "code \(code): \(description)"
++                    }
++                  case .notAttempted(let txId):
++                    stillUndelivered.append(txId.toHexStringTxId())
++                  }
++                }
++              } catch {
++                break
++              }
++              undelivered = stillUndelivered
++              if rejected != nil { break }
+             }
+           }
+ 
 +          if !undelivered.isEmpty {
 +            let ids = undelivered.joined(separator: ",")
 +            if let rejected {
 +              reject("SubmitRejected", "txids:\(ids) \(rejected)", genericError)
 +            } else {
-+              reject("SubmitPending", "txids:\(ids)", genericError)
-             }
++              reject("SubmitPending", "txids:\(ids) detail:\(reason ?? "unknown")", genericError)
++            }
 +            return
-           }
- 
++          }
++
            resolve(lastTxid)
-@@ -631,6 +698,214 @@ class RNZcash: RCTEventEmitter {
+         } catch {
+           reject("createTransfer", "Failed to spend", error)
+@@ -631,6 +757,214 @@ class RNZcash: RCTEventEmitter {
      }
    }
  
@@ -422,7 +513,7 @@ index 825c463..b9ffacd 100644
    @objc func deriveUnifiedAddress(
      _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
      rejecter reject: @escaping RCTPromiseRejectBlock
-@@ -888,6 +1163,9 @@ class WalletSynchronizer: NSObject {
+@@ -888,6 +1222,9 @@ class WalletSynchronizer: NSObject {
      if tx.fee != nil {
        confTx.fee = String(describing: abs(tx.fee!.amount))
      }
@@ -432,7 +523,7 @@ index 825c463..b9ffacd 100644
      if tx.isSentTransaction {
        let recipients = await self.synchronizer.getRecipients(for: tx)
        if recipients.count > 0 {
-@@ -998,3 +1276,64 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
+@@ -998,3 +1335,268 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
        isDirectory: true
      )
  }
@@ -495,5 +586,209 @@ index 825c463..b9ffacd 100644
 +  case (172, 16...31): return true
 +  case (100, 64...127): return true
 +  default: return false
++  }
++}
++
++// MARK: - Zecky addition: security keys (FIDO2)
++//
++// Pairing and checking go through Apple's own security key sheet, for the
++// relying party zecky.app (linked by the app's Associated Domains and the
++// site's apple-app-site-association). The tap happens over NFC, USB-C or
++// Lightning; nothing goes over the network. The JavaScript side checks the
++// answer's contents; the signature is checked here with CryptoKit.
++
++@available(iOS 15.0, *)
++final class SecurityKeyRequest: NSObject, ASAuthorizationControllerDelegate,
++  ASAuthorizationControllerPresentationContextProviding
++{
++  static let relyingParty = "zecky.app"
++  /// One request at a time, kept alive until Apple's sheet answers.
++  private static var current: SecurityKeyRequest?
++
++  private let resolve: RCTPromiseResolveBlock
++  private let reject: RCTPromiseRejectBlock
++  private var controller: ASAuthorizationController?
++
++  private init(
++    resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock
++  ) {
++    self.resolve = resolve
++    self.reject = reject
++  }
++
++  /// Must be called on the main thread.
++  static func start(
++    _ request: ASAuthorizationRequest,
++    resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock
++  ) {
++    if current != nil {
++      reject("SECURITY_KEY_BUSY", "A security key request is already open", nil)
++      return
++    }
++    let handler = SecurityKeyRequest(resolve: resolve, reject: reject)
++    let controller = ASAuthorizationController(authorizationRequests: [request])
++    controller.delegate = handler
++    controller.presentationContextProvider = handler
++    handler.controller = controller
++    current = handler
++    controller.performRequests()
++  }
++
++  private func finish() {
++    controller = nil
++    SecurityKeyRequest.current = nil
++  }
++
++  func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
++    let windows = UIApplication.shared.connectedScenes
++      .compactMap { $0 as? UIWindowScene }
++      .flatMap { $0.windows }
++    return windows.first { $0.isKeyWindow } ?? windows.first ?? ASPresentationAnchor()
++  }
++
++  func authorizationController(
++    controller: ASAuthorizationController,
++    didCompleteWithAuthorization authorization: ASAuthorization
++  ) {
++    defer { finish() }
++    if let created = authorization.credential
++      as? ASAuthorizationSecurityKeyPublicKeyCredentialRegistration
++    {
++      resolve([
++        "credentialId": created.credentialID.base64EncodedString(),
++        "attestationObject": (created.rawAttestationObject as Data?)?.base64EncodedString() ?? "",
++        "clientDataJSON": created.rawClientDataJSON.base64EncodedString(),
++      ])
++    } else if let answer = authorization.credential
++      as? ASAuthorizationSecurityKeyPublicKeyCredentialAssertion
++    {
++      resolve([
++        "credentialId": answer.credentialID.base64EncodedString(),
++        "authenticatorData": (answer.rawAuthenticatorData as Data?)?.base64EncodedString() ?? "",
++        "clientDataJSON": answer.rawClientDataJSON.base64EncodedString(),
++        "signature": (answer.signature as Data?)?.base64EncodedString() ?? "",
++      ])
++    } else {
++      reject("SECURITY_KEY_FAILED", "Unexpected answer from the security key", nil)
++    }
++  }
++
++  func authorizationController(
++    controller: ASAuthorizationController, didCompleteWithError error: Error
++  ) {
++    defer { finish() }
++    let cancelled = (error as? ASAuthorizationError)?.code == .canceled
++    reject(
++      cancelled ? "SECURITY_KEY_CANCELLED" : "SECURITY_KEY_FAILED",
++      error.localizedDescription, error)
++  }
++}
++
++extension RNZcash {
++  /// Zecky addition: whether this iPhone can use security keys.
++  @objc func securityKeySupported(
++    _ resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    if #available(iOS 15.0, *) {
++      resolve(true)
++    } else {
++      resolve(false)
++    }
++  }
++
++  /// Zecky addition: pairs a security key. challenge and userId are base64.
++  /// The credential is not stored on the key itself (no resident key), so
++  /// the key's own list of logins does not show Zecky.
++  @objc func securityKeyRegister(
++    _ challenge: String, _ userId: String,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    guard #available(iOS 15.0, *) else {
++      reject("SECURITY_KEY_UNSUPPORTED", "Needs iOS 15 or later", nil)
++      return
++    }
++    guard let challengeData = Data(base64Encoded: challenge),
++      let userData = Data(base64Encoded: userId)
++    else {
++      reject("SECURITY_KEY_FAILED", "Invalid input", nil)
++      return
++    }
++    DispatchQueue.main.async {
++      let provider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(
++        relyingPartyIdentifier: SecurityKeyRequest.relyingParty)
++      let request = provider.createCredentialRegistrationRequest(
++        challenge: challengeData, displayName: "Zecky Lock it", name: "Zecky Lock it",
++        userID: userData)
++      request.credentialParameters = [
++        ASAuthorizationPublicKeyCredentialParameters(algorithm: .ES256)
++      ]
++      request.residentKeyPreference = .discouraged
++      request.userVerificationPreference = .discouraged
++      request.attestationPreference = .none
++      SecurityKeyRequest.start(request, resolve: resolve, reject: reject)
++    }
++  }
++
++  /// Zecky addition: asks for one of the paired keys (credential IDs in
++  /// base64) to answer a fresh challenge.
++  @objc func securityKeyAssert(
++    _ challenge: String, _ credentialIds: [String],
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    guard #available(iOS 15.0, *) else {
++      reject("SECURITY_KEY_UNSUPPORTED", "Needs iOS 15 or later", nil)
++      return
++    }
++    let ids = credentialIds.compactMap { Data(base64Encoded: $0) }
++    guard let challengeData = Data(base64Encoded: challenge), !ids.isEmpty,
++      ids.count == credentialIds.count
++    else {
++      reject("SECURITY_KEY_FAILED", "Invalid input", nil)
++      return
++    }
++    DispatchQueue.main.async {
++      let provider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(
++        relyingPartyIdentifier: SecurityKeyRequest.relyingParty)
++      let request = provider.createCredentialAssertionRequest(challenge: challengeData)
++      request.allowedCredentials = ids.map {
++        ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor(
++          credentialID: $0,
++          transports: ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport
++            .allSupported)
++      }
++      request.userVerificationPreference = .discouraged
++      SecurityKeyRequest.start(request, resolve: resolve, reject: reject)
++    }
++  }
++
++  /// Zecky addition: checks a security key's ES256 signature over
++  /// authenticatorData + SHA-256(clientDataJSON). All inputs base64; the
++  /// public key is the uncompressed 65-byte form. Resolves true or false.
++  @objc func securityKeyVerify(
++    _ publicKey: String, _ authenticatorData: String, _ clientDataJSON: String,
++    _ signature: String,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    guard let keyData = Data(base64Encoded: publicKey),
++      let authData = Data(base64Encoded: authenticatorData),
++      let clientData = Data(base64Encoded: clientDataJSON),
++      let signatureData = Data(base64Encoded: signature)
++    else {
++      resolve(false)
++      return
++    }
++    do {
++      let key = try P256.Signing.PublicKey(x963Representation: keyData)
++      let ecdsa = try P256.Signing.ECDSASignature(derRepresentation: signatureData)
++      var message = authData
++      message.append(contentsOf: SHA256.hash(data: clientData))
++      resolve(key.isValidSignature(ecdsa, for: message))
++    } catch {
++      resolve(false)
++    }
 +  }
 +}

@@ -10,6 +10,8 @@ interface Props {
   amountText: string | null;
   /** Shielding can only start once the wallet is up to date. */
   ready: boolean;
+  /** Why it is not ready yet, shown under the text. */
+  waitReason?: string;
   busy: boolean;
   /** What happened after the last try, if anything. */
   note: string | null;
@@ -26,6 +28,7 @@ export function LockInPrompt({
   visible,
   amountText,
   ready,
+  waitReason = 'This works once the wallet is up to date.',
   busy,
   note,
   onLockIn,
@@ -79,9 +82,9 @@ export function LockInPrompt({
               : `${amountText} outside the lock`}
           </Text>
           <Text style={styles.body}>
-            It arrived on your public address. Anyone can see it until it is
-            locked in. Locking it in moves it into your private balance, for a
-            small network fee.
+            It arrived on your transparent address. Anyone can see it until it
+            is locked in. Locking it in moves it into your shielded balance, for
+            a small network fee.
           </Text>
           {note != null && (
             <Text
@@ -93,11 +96,7 @@ export function LockInPrompt({
               {note}
             </Text>
           )}
-          {!ready && (
-            <Text style={styles.note}>
-              This works once the wallet is up to date.
-            </Text>
-          )}
+          {!ready && <Text style={styles.note}>{waitReason}</Text>}
           <View style={styles.button}>
             <BrassButton
               label="Lock it in"

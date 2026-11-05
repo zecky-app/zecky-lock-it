@@ -19,7 +19,7 @@ const TITLES = {
   received: 'Locked in',
   sent: 'Released',
   self: 'Released to yourself',
-  shielded: 'Locked in from public',
+  shielded: 'Locked in from transparent',
 };
 
 function status(tx: Transaction): string {

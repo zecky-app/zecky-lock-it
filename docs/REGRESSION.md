@@ -36,12 +36,21 @@ Tick each one. Expected result in brackets.
 - [ ] Zecky code mode: opening Zecky, opening the lock and the phrase ask for the code
 - [ ] Both checks and the question off (one tap opens the lock; page says so)
 - [ ] Viewing key (always asks)
+- [ ] Overview shows ① Opening Zecky ② Opening the lock ③ Really open the lock? ④ Security key, with their state
+- [ ] Add a security key (Face ID or code first; Apple's sheet; "Key added ✓"); Test key ("Your key works ✓")
+- [ ] Add a backup key (asks the first key, then the new one); the same key twice is refused
+- [ ] Remove a key (asks a key tap); closing the sheet removes nothing
+- [ ] "Also ask the key to show the recovery phrase": off with one key; with two, the paper warning first; the phrase then asks a key; switching off asks a key
+- [ ] Lost your keys: removal starts (owner check), Home shows "Security key removal: after …", a key tap cancels it
+- [ ] zecky.app/.well-known/apple-app-site-association still served (removing it breaks security keys after an update)
 
 **Lock more and release**
 - [ ] Lock more fits without scrolling; scan the QR with the Z from another wallet (with and without a requested amount)
 - [ ] Receive from another wallet (note counts down: "usable in about N minutes · x/10 confirmations", gone after 10)
 - [ ] Try to spend before it is spendable (clear message, nothing sent)
 - [ ] Release to another wallet (receipt totals and "Stays locked" match; lock closes; confirmed in Activity)
+- [ ] With a security key: receipt says "Tapping your key sends it", button "Release … with your key"; cancel on Apple's sheet sends nothing and shows no error; a key tap releases
+- [ ] With a security key: Lock it in from the public address asks no key
 - [ ] Release to your own address ("Yourself" on the receipt; "To yourself", only the fee)
 - [ ] Release max (nothing left behind except what the fee needs)
 - [ ] Activity (summary, filters, months, details; Export history)
@@ -60,8 +69,22 @@ Tick each one. Expected result in brackets.
 - [ ] Wrong phrase on restore (refused with a clear message)
 - [ ] Delete the app and install again (welcome screen, nothing left)
 
+**Network upgrades**
+- [ ] While ENGINE_KNOWS_NU7 is false and the network is past NU7: Release shows the NU7 pause and Review is greyed out; Lock it in waits with the NU7 line; receiving and syncing work
+- [ ] After an engine update for NU7: set ENGINE_KNOWS_NU7 to true, then a small release and a lock-in go through
+
+**Tor**
+- [ ] Tor on with Rock it (Tailscale or home): grey onion, Network says "Not needed with your own node", a release goes out straight away; the ≈ price still comes (USD, over Tor)
+- [ ] Tor on with zec.rocks: gold onion, a release goes out (a failed first try is retried at once)
+- [ ] Tor on while it is still connecting, or with Tor failing (red onion): Release shows "Tor is not connected yet", Review is greyed out; Lock it in waits; nothing goes out. Once Tor is on, both work.
+
 **Privacy on the phone**
 - [ ] App switcher with Home or the phrase open (cover shown, not the balance or the words)
+- [ ] Start a screen recording (Control Center) with Zecky open: the lock cover with "Hidden while the screen is recorded or mirrored"; stop recording: Zecky is back
+- [ ] Start a screen recording with Settings or Release open: the cover is above the sheet; with VoiceOver on, nothing behind the cover is read out
+- [ ] Restore with a 12-word phrase: warning first, second tap goes ahead
+- [ ] Scan a payment request with two recipients: refused with a clear message
+- [ ] Fresh install: no ≈ value until "Show the value in your currency" is chosen; no price request before that
 - [ ] iPhone Settings › your name › iCloud › Manage storage › Backups (Zecky's wallet data not listed as a large backup item)
 
 **Last**

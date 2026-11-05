@@ -32,6 +32,20 @@ export function parseScanned(text: string): ScannedPayment | null {
   return zatoshi == null ? { address } : { address, zatoshi };
 }
 
+/**
+ * Self-audit F4: a ZIP 321 request can name several recipients (address.1,
+ * amount.1 …). Zecky pays one recipient at a time, so such a request is
+ * refused instead of silently paying only the first.
+ */
+export function isMultiRecipient(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^zcash:/i.test(trimmed)) return false;
+  const query = trimmed.split('?')[1] ?? '';
+  return query
+    .split('&')
+    .some(pair => /^[a-z]+\.\d+$/i.test(pair.split('=')[0]));
+}
+
 /** A "zcash:" payment request for `address`, optionally for a set amount. */
 export function buildPaymentUri(address: string, zatoshi?: string): string {
   if (zatoshi == null) return `zcash:${address}`;

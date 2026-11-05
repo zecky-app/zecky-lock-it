@@ -11,21 +11,37 @@ import { NETWORK, WALLET_ALIAS } from '../config';
 import {
   friendlyError,
   HOME_NODE_SEND,
+  SYNC_DROPPED,
+  SYNC_DROPPED_LONG,
   OFFLINE_SEND,
+  NU7_PAUSED,
+  SERVER_CHANGED_SEND,
+  TOR_NOT_READY,
   paymentSavedError,
   SEND_PENDING,
   SEND_REJECTED,
 } from '../lib/errors';
 import { canReachHomeNode, isOnline } from '../lib/network';
-import { pruneSent, recordSent, txIdsFrom } from '../lib/sentLog';
+import { detailFrom, pruneSent, recordSent, txIdsFrom } from '../lib/sentLog';
 import { Balances, loadLastBalance, saveLastBalance } from '../lib/lastBalance';
 import { loadAddresses } from '../lib/addressBook';
 import { addOwnAddresses } from '../lib/transactions';
-import { getServer, isHomeNode, useServer } from '../lib/server';
-import { getTorWanted, TorStatus, useTorWanted } from '../lib/tor';
+import { getServer, isHomeNode, sameServer, useServer } from '../lib/server';
+import { checkSecurityKey, loadSecurityKeyState } from '../lib/securityKey';
+import {
+  getTorWanted,
+  torBlocksRelease,
+  torForServer,
+  TorStatus,
+  useTorWanted,
+} from '../lib/tor';
 import { mergeTransactions } from '../lib/transactions';
+import { nu7Pauses } from '../lib/upgrades';
 import type { StoredWallet } from './seed';
 import type { PoolBalances } from '../lib/pools';
+
+/** After this long without progress, a dropped connection suggests another server. */
+const SYNC_DROPPED_TIP_MS = 3 * 60 * 1000;
 
 export type SyncStatus = StatusEvent['name'] | 'STARTING';
 
@@ -153,7 +169,15 @@ function nativeMessage(e: unknown): string {
  */
 export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   const [state, setState] = useState<WalletState>(initialState);
+  // The engine's Tor state as last reported, for the release check (N1).
+  // When the connection to the server first dropped, until syncing moves.
+  const errorSince = useRef<number | null>(null);
+  const torStatus = useRef<TorStatus>('off');
+  torStatus.current = state.tor;
+  const heightNow = useRef(0);
+  heightNow.current = state.networkHeight;
   const live = useRef<Synchronizer | null>(null);
+
   const started = useRef(false);
   // True once the engine itself has reported a balance in this session.
   const liveBalance = useRef(false);
@@ -172,20 +196,35 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   }, [wallet.birthdayHeight]);
 
   // Asks the engine to turn Tor on or off. A failure leaves the wallet on a
-  // direct connection, and says so.
-  const applyTor = useCallback(async (enable: boolean) => {
-    const native = NativeModules.RNZcash;
-    if (typeof native?.setTor !== 'function') {
-      setState(prev => ({ ...prev, tor: enable ? 'unavailable' : 'off' }));
-      return;
-    }
-    setState(prev => ({ ...prev, tor: enable ? 'starting' : 'off' }));
-    try {
-      await native.setTor(WALLET_ALIAS, enable);
-      setState(prev => ({ ...prev, tor: enable ? 'on' : 'off' }));
-    } catch {
-      setState(prev => ({ ...prev, tor: enable ? 'failed' : 'off' }));
-    }
+  // direct connection, and says so. With the owner's own node (Rock it) the
+  // wallet talks to it directly, also with Tor wanted: see torForServer.
+  // Quick on/off taps: the engine calls run one after another, in order,
+  // and only the latest request sets the status (re-check R8).
+  const torRequest = useRef(0);
+  const torQueue = useRef<Promise<void>>(Promise.resolve());
+  const applyTor = useCallback((wanted: boolean) => {
+    const request = ++torRequest.current;
+    const settle = (tor: TorStatus) => {
+      if (request === torRequest.current) setState(prev => ({ ...prev, tor }));
+    };
+    const run = async () => {
+      const native = NativeModules.RNZcash;
+      const enable = torForServer(wanted, getServer());
+      const idle: TorStatus = wanted ? 'ownNode' : 'off';
+      if (typeof native?.setTor !== 'function') {
+        settle(enable ? 'unavailable' : idle);
+        return;
+      }
+      settle(enable ? 'starting' : idle);
+      try {
+        await native.setTor(WALLET_ALIAS, enable);
+        settle(enable ? 'on' : idle);
+      } catch {
+        settle(enable ? 'failed' : idle);
+      }
+    };
+    torQueue.current = torQueue.current.then(run, run);
+    return torQueue.current;
   }, []);
 
   // Changing the server in Settings restarts the wallet on the new one.
@@ -289,11 +328,32 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
             }));
           },
           onUpdate: event =>
-            patch({
-              scanProgress: event.scanProgress,
-              networkHeight: event.networkBlockHeight,
+            // Syncing moving forward again clears an earlier connection
+            // error: the status itself may never change while it catches up.
+            setState(prev => {
+              const moved = event.scanProgress > prev.scanProgress;
+              if (moved) errorSince.current = null;
+              return {
+                ...prev,
+                scanProgress: event.scanProgress,
+                networkHeight: event.networkBlockHeight,
+                error: moved ? null : prev.error,
+              };
             }),
-          onError: error => patch({ error: friendlyError(error.message) }),
+          onError: error => {
+            const text = friendlyError(error.message);
+            if (text === SYNC_DROPPED) {
+              // Keeps dropping for a few minutes: suggest another server.
+              const now = Date.now();
+              errorSince.current ??= now;
+              patch({
+                error:
+                  now - errorSince.current > SYNC_DROPPED_TIP_MS
+                    ? SYNC_DROPPED_LONG
+                    : SYNC_DROPPED,
+              });
+            } else patch({ error: text });
+          },
         });
         started.current = true;
         if (getTorWanted()) applyTor(true);
@@ -367,6 +427,7 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
 
   const proposeTransfer = useCallback<Wallet['proposeTransfer']>(async opts => {
     if (live.current == null) throw new Error('The wallet is still starting');
+    if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
     try {
       return await live.current.proposeTransfer(opts);
     } catch (e) {
@@ -412,11 +473,34 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   const sendProposal = useCallback<Wallet['sendProposal']>(
     async proposalBase64 => {
       if (live.current == null) throw new Error('The wallet is still starting');
+      // NU7: the engine in this build cannot make transactions the network
+      // accepts after the upgrade, so nothing is built at all.
+      if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
+      if (torBlocksRelease(getTorWanted(), torStatus.current)) {
+        throw new Error(TOR_NOT_READY);
+      }
       // Offline, nothing is created at all.
       if (!(await isOnline())) throw new Error(OFFLINE_SEND);
       const current = getServer();
       if (isHomeNode(current) && !(await canReachHomeNode(current))) {
         throw new Error(HOME_NODE_SEND);
+      }
+      // Keys to the lock ④: with a security key added, releasing asks a
+      // tap of one of them. Checked here, right before the transfer is
+      // made, so no screen can skip it. Throws SecurityKeyError.
+      if ((await loadSecurityKeyState()).keys.length > 0) {
+        await checkSecurityKey();
+        // Waiting for the tap can take a while: check again that nothing
+        // changed in between (re-check R7).
+        if (live.current == null) {
+          throw new Error('The wallet is still starting');
+        }
+        if (torBlocksRelease(getTorWanted(), torStatus.current)) {
+          throw new Error(TOR_NOT_READY);
+        }
+        if (!sameServer(getServer(), current)) {
+          throw new Error(SERVER_CHANGED_SEND);
+        }
       }
       let result;
       try {
@@ -438,6 +522,7 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
           recordSent(ids, true);
           throw paymentSavedError(
             code === 'SubmitRejected' ? SEND_REJECTED : SEND_PENDING,
+            detailFrom(message),
           );
         }
         throw new Error(friendlyError(message));
@@ -481,6 +566,10 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
 
   const shieldFunds = useCallback<Wallet['shieldFunds']>(async () => {
     if (live.current == null) throw new Error('The wallet is still starting');
+    if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
+    if (torBlocksRelease(getTorWanted(), torStatus.current)) {
+      throw new Error(TOR_NOT_READY);
+    }
     try {
       return await live.current.shieldFunds({
         seed: wallet.mnemonic,

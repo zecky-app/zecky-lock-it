@@ -11,6 +11,7 @@ import { BackupScreen } from './src/screens/BackupScreen';
 import { ConfirmPhraseScreen } from './src/screens/ConfirmPhraseScreen';
 import { loadPhraseState, setPhraseUnconfirmed } from './src/lib/phraseCheck';
 import { loadPinState, usePinEnabled } from './src/lib/pin';
+import { loadSecurityKeyState } from './src/lib/securityKey';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LockScreen } from './src/screens/LockScreen';
 import { RestoreScreen } from './src/screens/RestoreScreen';
@@ -79,6 +80,7 @@ function App() {
           loadPinState().catch(() => false),
           minimum,
           loadPhraseState(),
+          loadSecurityKeyState().catch(() => null),
         ]),
       )
       .then(([wallet, hasPin]) => {

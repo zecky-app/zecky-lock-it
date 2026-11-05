@@ -1,4 +1,4 @@
-import { parseScanned } from '../src/lib/paymentUri';
+import { isMultiRecipient, parseScanned } from '../src/lib/paymentUri';
 
 const addr = 'u1' + 'q'.repeat(60);
 
@@ -22,4 +22,15 @@ test('rejects things that are not Zcash codes', () => {
   expect(parseScanned('hello world')).toBeNull();
   expect(parseScanned('zcash:short')).toBeNull();
   expect(parseScanned(`zcash:${addr}?amount=abc`)).toEqual({ address: addr });
+});
+
+test('requests for several recipients are recognised (F4)', () => {
+  expect(
+    isMultiRecipient(
+      `zcash:?address=${addr}&amount=1&address.1=${addr}&amount.1=2`,
+    ),
+  ).toBe(true);
+  expect(isMultiRecipient(`zcash:${addr}?amount=1&memo.1=abc`)).toBe(true);
+  expect(isMultiRecipient(`zcash:${addr}?amount=1.5&memo=abc`)).toBe(false);
+  expect(isMultiRecipient(addr)).toBe(false);
 });

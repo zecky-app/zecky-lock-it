@@ -10,10 +10,11 @@ import { KEYCHAIN_SERVICES } from './freshInstall';
 import { clearLastBalance } from './lastBalance';
 import { setPhraseUnconfirmed } from './phraseCheck';
 import { clearPin } from './pin';
+import { clearSecurityKeys } from './securityKey';
 
 /**
  * Removes the wallet from this phone: the recovery phrase, the app code,
- * contacts, the list of handed-out addresses, the last known balance, the
+ * contacts, the security keys, the list of handed-out addresses, the last known balance, the
  * Face ID marker and the wallet database. Settings are reset separately by
  * resetAllSettings, once the wallet screen has closed.
  * The funds themselves are untouched and can be restored with the phrase.
@@ -42,6 +43,7 @@ export async function eraseWallet(
   await deleteWallet();
   setPhraseUnconfirmed(false);
   await clearPin();
+  await clearSecurityKeys();
   await clearOwnerMarker();
   await clearContacts();
   await clearLastBalance();

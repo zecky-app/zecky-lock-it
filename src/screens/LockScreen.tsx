@@ -51,7 +51,11 @@ function CodeLock({ onUnlock }: { onUnlock: () => void }) {
   );
 
   return (
-    <View style={styles.cover}>
+    <View
+      style={styles.cover}
+      // Self-audit F3: VoiceOver stays on the cover, never behind it.
+      accessibilityViewIsModal
+    >
       <ZeckyLock open={false} size={96} />
       <View style={[styles.wordmark, styles.wordmarkSmall]}>
         <Text style={styles.brand}>ZECKY</Text>
@@ -100,7 +104,11 @@ function DeviceLock({ onUnlock }: { onUnlock: () => void }) {
   }, [ask]);
 
   return (
-    <View style={styles.cover}>
+    <View
+      style={styles.cover}
+      // Self-audit F3: VoiceOver stays on the cover, never behind it.
+      accessibilityViewIsModal
+    >
       <ZeckyLock open={false} size={150} />
       <View style={styles.wordmark}>
         <Text style={styles.brand}>ZECKY</Text>

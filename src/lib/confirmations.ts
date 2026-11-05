@@ -1,15 +1,15 @@
 import type { Transaction } from 'react-native-zcash';
 import { txKind } from './transactions';
+import { blockSeconds } from './upgrades';
 
 // How long until Zcash that is still confirming can be used. The Zcash
 // libraries require 10 confirmations for Zcash that arrives from someone
 // else and 3 for the wallet's own change (as in Zodl); a block takes about
-// 75 seconds. Worked out from what the engine already reports: the block a
+// 75 seconds, and 25 seconds since NU7. Worked out from what the engine already reports: the block a
 // payment is in and the latest block of the network.
 
 export const CONFIRMATIONS_RECEIVED = 10;
 export const CONFIRMATIONS_OWN = 3;
-export const BLOCK_SECONDS = 75;
 
 export interface Waiting {
   /** Confirmations so far (0 while not in a block yet). */
@@ -44,7 +44,10 @@ export function slowestWaiting(
         confirmations,
         needed,
         left,
-        minutes: Math.max(1, Math.round((left * BLOCK_SECONDS) / 60)),
+        minutes: Math.max(
+          1,
+          Math.round((left * blockSeconds(networkHeight)) / 60),
+        ),
       };
     }
   }
@@ -58,7 +61,7 @@ export function slowestWaiting(
 
 /** "usable in about 6 minutes · 4/10 confirmations" */
 export function waitingText(w: Waiting | null): string {
-  if (w == null) return 'usable within about 12 minutes';
+  if (w == null) return 'usable within a few minutes';
   const time = w.minutes <= 1 ? 'about a minute' : `about ${w.minutes} minutes`;
   const progress =
     w.confirmations === 0

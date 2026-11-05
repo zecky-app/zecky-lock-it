@@ -6,8 +6,6 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Zecky connects to your own Zcash node (Rock it) on your home network.</string>
 	<key>CFBundleDisplayName</key>
 	<string>Zecky Lock it</string>
 	<key>CFBundleExecutable</key>
@@ -38,9 +36,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Zecky uses the camera to scan Zcash address QR codes.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>To protect your recovery phrase.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>To check it is you before opening Zecky, the lock or your recovery phrase.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Zecky connects to your own Zcash node (Rock it) on your home network.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIAppFonts</key>

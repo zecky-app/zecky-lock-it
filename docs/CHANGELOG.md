@@ -2,6 +2,36 @@
 
 What changed in each version, in plain words. Newest first.
 
+## 0.0.19, build 18 (November 5, 2026)
+- Zcash network upgrade NU7: until Zecky's Zcash engine is updated for it,
+  releasing and locking in are paused with a clear message. Your Zcash is
+  safe, and receiving keeps working.
+- Blocks now come every 25 seconds: waiting times for new Zcash are
+  shorter and shown correctly.
+- Addresses are called shielded and transparent, the standard Zcash words,
+  each with a short explanation.
+- A dropped connection to the Zcash server while syncing shows a calm
+  message that clears by itself.
+- Lock more is calmer at the bottom: the switch to the transparent
+  address has its own quiet line.
+
+## 0.0.19 (October 27, 2026)
+- Security key: add a FIDO2 key such as a YubiKey under Keys to the lock
+  ④. Each release then asks a tap of the key, and the tap sends it. Add a
+  backup key; removing a key asks a key; lost keys can be removed after 48
+  hours. Optionally, the key also guards the recovery phrase.
+- Keys to the lock is now a numbered overview of all four keys.
+- Tor with your own node: Zecky now talks to Rock it directly, also with
+  Tor on, because a Tor connection could not reach it and releases got
+  stuck. With a public server, a failed Tor release is tried again at once.
+- Safety fixes from our own security audit and an independent re-check:
+  nothing is released while Tor is wanted but not connected; the screen is
+  hidden while it is recorded or mirrored; a 12- or 18-word phrase gets a
+  warning on restore; payment requests with several recipients are
+  refused; no price request until you choose a currency; wallet files stay
+  out of backups; only a Rock it node added from its QR code counts as
+  your own; the Zcash engine is checked against the official build.
+
 ## 0.0.18 (October 22, 2026)
 - A new look, the same as Lock it on the Mac: a golden lock on a fine
   guilloché medallion, a ring that fills towards your next milestone, and

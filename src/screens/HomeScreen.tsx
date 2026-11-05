@@ -21,6 +21,7 @@ import {
 import type { Currency } from '../config';
 import { formatFiat, usePrices } from '../lib/price';
 import {
+  isCurrencyChosen,
   loadCurrency,
   loadHidden,
   loadUnit,
@@ -28,18 +29,32 @@ import {
   saveHidden,
   saveUnit,
 } from '../lib/settings';
-import { isHomeNode, useServer } from '../lib/server';
+import {
+  isHomeNode,
+  nodeKind,
+  NodeKind,
+  nodeLabel,
+  useServer,
+} from '../lib/server';
 import { txKind } from '../lib/transactions';
 import { daysSince, lockedSince } from '../lib/lockedSince';
 import { nextMilestone } from '../lib/milestones';
 import { slowestWaiting, waitingText } from '../lib/confirmations';
 import { confirmOwner } from '../lib/deviceAuth';
 import { usePinEnabled } from '../lib/pin';
+import { SYNC_DROPPED } from '../lib/errors';
+import {
+  finishKeyRemovalIfDue,
+  noteSyncedHeight,
+  useSecurityKeys,
+} from '../lib/securityKey';
+import { removalEndsAt } from '../lib/keyRules';
 import { useOpenWait } from '../lib/openWait';
 import { asksAt, useAskWhen } from '../lib/askWhen';
 import { tapLockStep } from '../lib/lockRules';
 import { useHomeNodeReachable, useNetwork } from '../lib/network';
-import { useTorWanted } from '../lib/tor';
+import { torBlocksRelease, useTorWanted } from '../lib/tor';
+import { nu7Pauses } from '../lib/upgrades';
 import {
   Unit,
   confirmingZatoshi,
@@ -80,6 +95,7 @@ const TOR_LABELS = {
   on: 'on',
   failed: 'could not connect',
   unavailable: 'not available',
+  ownNode: 'not needed with your own node',
 } as const;
 
 /**
@@ -89,17 +105,19 @@ const TOR_LABELS = {
 function statusLine(
   status: SyncStatus,
   progress: number,
-  rockIt = false,
+  node: NodeKind | null = null,
 ): string {
+  // Self-audit N2: always say which Rock it, home network or Tailscale.
+  const via = node == null ? '' : ` · ${nodeLabel(node)}`;
   switch (status) {
     case 'STARTING':
-      return rockIt ? 'Connecting… · Rock it' : 'Connecting…';
+      return `Connecting…${via}`;
     case 'SYNCING':
-      return `Syncing ${Math.floor(progress)}%${rockIt ? ' · Rock it' : ''}`;
+      return `Syncing ${Math.floor(progress)}%${via}`;
     case 'SYNCED':
-      return rockIt ? 'Up to date · Rock it' : 'Up to date';
+      return `Up to date${via}`;
     case 'DISCONNECTED':
-      return rockIt ? 'Rock it not reachable' : 'Offline';
+      return node == null ? 'Offline' : `${nodeLabel(node)} not reachable`;
     case 'STOPPED':
       return 'Stopped';
   }
@@ -135,11 +153,12 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const dark = useIsDark();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsStart, setSettingsStart] = useState<
-    'server' | 'phrase' | undefined
+    'server' | 'phrase' | 'display' | 'seckey' | undefined
   >();
   const [activityOpen, setActivityOpen] = useState(false);
   const phraseUnconfirmed = usePhraseUnconfirmed();
   const [currency, setCurrency] = useState<Currency | null>(loadCurrency);
+  const [currencyChosen, setCurrencyChosen] = useState(isCurrencyChosen);
   // With Tor switched on, the price comes through Tor from the Zcash
   // engine, which only knows USD. It never falls back to a direct request.
   const torWanted = useTorWanted();
@@ -147,11 +166,16 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     currency == null ? null : torWanted ? 'USD' : currency;
   const prices = usePrices(
     shownCurrency != null,
-    !torWanted ? 'direct' : state.tor === 'on' ? 'tor' : 'none',
+    !torWanted
+      ? 'direct'
+      : state.tor === 'on' || state.tor === 'ownNode'
+      ? 'tor'
+      : 'none',
   );
   const price = shownCurrency == null ? undefined : prices?.[shownCurrency];
   const chooseCurrency = (next: Currency | null) => {
     setCurrency(next);
+    setCurrencyChosen(true);
     saveCurrency(next);
   };
   const [openTxId, setOpenTxId] = useState<string | null>(null);
@@ -231,7 +255,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
       txId: tx.rawTransactionId,
       kind: 'received' as const,
       title: 'Locked in ✓',
-      detail: 'Your public Zcash is private now',
+      detail: 'Your transparent Zcash is shielded now',
     }));
     if (done.length > 0) setQueued(q => [...q, ...done]);
     if (received.length === 0) return;
@@ -370,7 +394,8 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     270 +
     (confirming !== '0' ? 28 : 0) +
     (outside || lockingIn ? 24 : 0) +
-    (phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n ? 24 : 0);
+    (phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n ? 24 : 0) +
+    (!currencyChosen ? 22 : 0);
   const heroScale =
     area === 0 ? 1 : Math.min(1, Math.max(0.5, (area - below) / 396));
   const fade = useRef(new Animated.Value(0)).current;
@@ -451,6 +476,18 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     return () => clearTimeout(t);
   }, [openNote]);
   const openWait = useOpenWait();
+  // "Lost my keys": a quiet line while it runs; done by itself once both
+  // the clock and the Zcash network show 48 hours.
+  // Only heights reached while fully synced count (re-check R1).
+  const keyRemoval = useSecurityKeys().removal;
+  const syncedHeight = synced ? state.networkHeight : 0;
+  useEffect(() => {
+    if (syncedHeight <= 0) return;
+    noteSyncedHeight(syncedHeight).catch(() => {});
+    if (keyRemoval != null) {
+      finishKeyRemovalIfDue(syncedHeight).catch(() => false);
+    }
+  }, [keyRemoval, syncedHeight]);
   const pinEnabled = usePinEnabled();
   useAskWhen();
   const checkOnOpen = asksAt('openLock', pinEnabled);
@@ -519,7 +556,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     ? 'No internet connection'
     : cutOff
     ? 'Rock it not reachable: not on home Wi-Fi or Tailscale'
-    : statusLine(shownStatus, state.scanProgress, rockIt);
+    : statusLine(shownStatus, state.scanProgress, nodeKind(server));
 
   return (
     <View style={styles.container}>
@@ -617,6 +654,21 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         {fiatLine != null && (
           <Text style={[styles.fiat, styles.center]}>{fiatLine}</Text>
         )}
+        {!currencyChosen && (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              setSettingsStart('display');
+              setSettingsOpen(true);
+            }}
+            style={styles.needRow}
+          >
+            <Text style={[styles.fiat, styles.center]}>
+              Show the value in your currency ›
+            </Text>
+          </Pressable>
+        )}
 
         <Text style={[styles.held, styles.center]}>
           {heldLine}
@@ -644,6 +696,28 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
                       ? 'Zcash'
                       : `+${formatExact(state.transparentZatoshi, unit)}`
                   } waiting outside the lock · Lock it in ›`}
+            </Text>
+          </Pressable>
+        )}
+        {keyRemoval != null && (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              setSettingsStart('seckey');
+              setSettingsOpen(true);
+            }}
+            style={styles.needRow}
+          >
+            <Text style={styles.needText}>
+              Security key removal: after{' '}
+              {removalEndsAt(keyRemoval).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}{' '}
+              ›
             </Text>
           </Pressable>
         )}
@@ -711,7 +785,16 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         )}
 
         {state.error != null && (
-          <Text style={[styles.error, styles.center]}>{state.error}</Text>
+          <Text
+            style={[
+              // A dropped connection that Zecky retries by itself is not an
+              // alarm: quiet text, not red.
+              state.error === SYNC_DROPPED ? styles.calmError : styles.error,
+              styles.center,
+            ]}
+          >
+            {state.error}
+          </Text>
         )}
 
         <View style={styles.spaceBelow} />
@@ -753,6 +836,8 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
                 color={
                   state.tor === 'on' || state.tor === 'starting'
                     ? colors.gold
+                    : state.tor === 'ownNode'
+                    ? colors.textMuted
                     : colors.danger
                 }
               />
@@ -810,6 +895,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         birthdayHeight={wallet.birthdayHeight}
         tor={state.tor}
         pools={state.pools}
+        networkHeight={synced ? state.networkHeight : 0}
         walletAddress={state.address}
         onErased={onErased}
         onClose={() => {
@@ -837,7 +923,18 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
       <LockInPrompt
         visible={lockInOpen && !locked}
         amountText={hidden ? null : formatExact(state.transparentZatoshi, unit)}
-        ready={synced}
+        ready={
+          synced &&
+          !nu7Pauses(state.networkHeight) &&
+          !torBlocksRelease(torWanted, state.tor)
+        }
+        waitReason={
+          !synced
+            ? undefined
+            : nu7Pauses(state.networkHeight)
+            ? 'Locking in is paused for the Zcash network upgrade (NU7) until Zecky is updated. Your Zcash is safe.'
+            : 'Tor is not connected yet. Locking in waits until it is, so your internet address stays hidden.'
+        }
         busy={shielding}
         note={shieldNote}
         onLockIn={shield}
@@ -962,6 +1059,13 @@ const useStyles = makeStyles(colors => ({
     fontFamily: fonts.sans,
     fontSize: 14,
     color: colors.danger,
+    marginTop: space.md,
+  },
+  calmError: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
     marginTop: space.md,
   },
   bottomBar: {

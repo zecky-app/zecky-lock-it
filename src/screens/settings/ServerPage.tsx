@@ -15,11 +15,14 @@ import {
   SERVER_PRESETS,
   serverLabel,
   serverName,
+  nodeKind,
+  nodeLabel,
   setServer,
   useSavedServers,
   useServer,
 } from '../../lib/server';
 import { setTorWanted, TorStatus, useTorWanted } from '../../lib/tor';
+import { restartKeyRemovalIfRunning } from '../../lib/securityKey';
 import { fonts, makeStyles, space, useColors } from '../../theme';
 
 const TIMEOUT_MS = 12_000;
@@ -43,6 +46,8 @@ const TOR_STATUS: Record<TorStatus, string> = {
   failed:
     'Tor could not connect on this network. The wallet is using a direct connection.',
   unavailable: 'Tor is not available in this build of Zecky.',
+  ownNode:
+    'Not needed with your own node: Rock it is yours, so there is nobody to hide your address from. Zecky talks to it directly; the price still goes through Tor.',
 };
 
 export function ServerPage({ tor }: { tor: TorStatus }) {
@@ -56,6 +61,8 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
   const [checking, setChecking] = useState<string | null>(null);
   // Scanning a server QR, such as the Wallet server code on Rock it's page.
   const [scanning, setScanning] = useState(false);
+  // A node scanned from Rock it's code counts as your own (re-check R3).
+  const [scannedNode, setScannedNode] = useState<Server | null>(null);
   const onScanned = (value: string) => {
     if (!scanning) return;
     setScanning(false);
@@ -65,6 +72,11 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
       return;
     }
     setMessage(null);
+    setScannedNode(
+      server.host.toLowerCase().endsWith('.ts.net') || isHomeNode(server)
+        ? server
+        : null,
+    );
     setCustom(serverLabel(server));
     if (name.trim() === '') {
       setName(
@@ -86,11 +98,18 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
     setMessage(null);
     try {
       if (switching) await checkServer(server);
+      const fromScan = scannedNode != null && sameServer(scannedNode, server);
       const label =
-        saveAs != null
-          ? saveServer(saveAs, server).name
+        saveAs != null || fromScan
+          ? saveServer(saveAs ?? 'Rock it', server, fromScan ? true : undefined)
+              .name
           : serverName(server) ?? serverLabel(server);
-      if (switching) setServer(server);
+      if (fromScan) setScannedNode(null);
+      if (switching) {
+        // A running "lost my keys" removal starts its 48 hours again.
+        await restartKeyRemovalIfRunning().catch(() => {});
+        setServer(server);
+      }
       setCustom('');
       setName('');
       setMessage(
@@ -139,6 +158,12 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
         </View>
       </View>
       <Text style={styles.remark}>Tor might slow down the connection.</Text>
+      {torWanted && tor !== 'ownNode' && (
+        <Text style={styles.remark}>
+          With Tor, a release sometimes needs a second try. Zecky tries again at
+          once, and otherwise every few minutes by itself.
+        </Text>
+      )}
       <Text style={styles.info}>
         Tor hides your internet address when Zecky releases Zcash, looks up your
         own payments, checks the chain height or fetches the price. Downloading
@@ -174,6 +199,15 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
       {(savedServers.length > 0 || (!isPreset && !isSaved)) && (
         <>
           <Text style={styles.label}>Your servers</Text>
+          {(nodeKind(current) === 'home' ||
+            nodeKind(current) === 'tailscaleIp') && (
+            <Text style={styles.remark}>
+              {nodeKind(current) === 'home' ? 'Home network only: ' : ''}
+              Zecky can't check that the node at this address is yours. Use the
+              Tailscale name (…ts.net) from your Rock it code instead: it only
+              exists in your own Tailscale network.
+            </Text>
+          )}
           <View style={styles.card}>
             {savedServers.map(saved => {
               const on = sameServer(saved, current);
@@ -193,7 +227,9 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
                     <Text style={styles.rowTitle}>{saved.name}</Text>
                     <Text style={styles.rowSub}>
                       {serverLabel(saved)}
-                      {isHomeNode(saved) ? ' · Rock it' : ''}
+                      {nodeKind(saved) != null
+                        ? ` · ${nodeLabel(nodeKind(saved) ?? 'home')}`
+                        : ''}
                     </Text>
                   </Pressable>
                   {busy ? (
@@ -295,6 +331,12 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
         Your own node: scan the Wallet server code on its Rock it page, or type
         its address. Save the home and Tailscale addresses under their own name.
       </Text>
+      {torWanted && (
+        <Text style={styles.info}>
+          Checking a server connects to it directly, also with Tor on: it sees
+          your internet address once, never anything about your wallet.
+        </Text>
+      )}
       <View style={styles.gap} />
       <Button
         label="Check, save and use"

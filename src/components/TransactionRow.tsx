@@ -12,7 +12,7 @@ const TITLES = {
   received: 'Locked',
   sent: 'Released',
   self: 'To yourself',
-  shielded: 'Locked in from public',
+  shielded: 'Locked in from transparent',
 };
 
 const ICONS: Record<keyof typeof TITLES, IconName> = {

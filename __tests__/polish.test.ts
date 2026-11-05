@@ -74,3 +74,24 @@ test('finds received payments too small to count', () => {
     ]),
   ).toEqual({ count: 2, zatoshi: '6000' });
 });
+
+// First tester report (Nov 4): a raw engine message while syncing.
+test('a dropped block download reads as a calm, temporary message', () => {
+  const { SYNC_DROPPED } =
+    jest.requireActual<typeof import('../src/lib/errors')>('../src/lib/errors');
+  expect(friendlyError('LightWalletService.blockStream failed.')).toBe(
+    SYNC_DROPPED,
+  );
+  expect(friendlyError('LightWalletService.getSubtreeRoots failed.')).toBe(
+    SYNC_DROPPED,
+  );
+  expect(SYNC_DROPPED).not.toMatch(/LightWallet|blockStream/);
+});
+
+test('syncing moving forward clears the connection error', () => {
+  const fs = jest.requireActual<{
+    readFileSync: (path: string, encoding: string) => string;
+  }>('fs');
+  const text = fs.readFileSync('src/wallet/useSynchronizer.ts', 'utf8');
+  expect(text).toContain('error: moved ? null : prev.error');
+});
