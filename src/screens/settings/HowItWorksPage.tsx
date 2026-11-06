@@ -16,63 +16,91 @@ const CHAPTERS: {
   icon: IconName;
   /** Numbered, gold: the keys to the lock, before the points. */
   keys?: { title: string; text: string }[];
+  /** The essentials: short, one idea each. */
   points: string[];
+  /** The fine print, folded under "More detail". */
+  more?: string[];
 }[] = [
   {
     title: 'The lock',
-    summary: 'For keeping Zcash, not spending it.',
+    summary: 'A place to keep Zcash, not to spend it.',
     icon: 'lock',
     points: [
-      'Locking more is always one tap. Opening the lock takes a deliberate moment.',
+      'Receiving is always one tap. Opening the lock to send takes a deliberate moment.',
+      'The open lock closes again after sending, after two minutes, or when you leave Zecky.',
+      'The ring around the lock fills towards your next milestone, from 1 week to 5 years.',
+    ],
+    more: [
       '“Locked for N days” counts from your first payment in, and starts over if the lock was ever emptied.',
-      'Milestones, from 1 week to 5 years, are worked out on this phone from your own payments.',
-      'An open lock closes after a release, after two minutes, or when you leave Zecky.',
+      'Milestones are worked out on this phone from your own payments.',
+    ],
+  },
+  {
+    title: 'Receive and send',
+    summary: 'Waiting times, fees and what can’t be undone.',
+    icon: 'arrowDown',
+    points: [
+      'New Zcash shows in your balance right away, and can be sent after about 4 minutes (10 blocks).',
+      'Each payment pays a small network fee, shown before you confirm. Zecky adds no fee of its own. Tick “Include the network fee” to take it out of the amount instead.',
+      'A payment can’t be reversed or cancelled. Check the address before you send.',
+    ],
+    more: [
+      'Since the NU7 upgrade (November 2026) a block comes every 25 seconds. Your own change after sending can be used after 3 blocks, about 1 minute. Send shows what can be used now, and when the rest will be.',
+      'While Zecky starts, syncs or is offline, it shows the last confirmed balance. The status at the bottom says so.',
+      'A payment of 5,000 zats or less costs more in fees to use than it is worth. It shows in Activity but isn’t counted in your balance.',
+      'Sending to a transparent address is public: its amount and destination.',
+    ],
+  },
+  {
+    title: 'Your 24 words',
+    summary: 'They are your Zcash. Keep them on paper.',
+    icon: 'eyeOff',
+    points: [
+      'Your Zcash is controlled by 24 words, made on this phone and never sent anywhere.',
+      'Whoever has the 24 words has the Zcash. Lose both the words and this phone, and it is gone for good.',
+      'Nobody else has a copy, so nobody can recover them for you.',
+    ],
+    more: [
+      'The words come from the phone’s secure random generator, checked and mixed with a second source. If that generator isn’t working, Zecky won’t create a wallet.',
+      'The phrase is kept in the phone’s secure storage.',
+      'Zecky asks for three of the words to check your paper. Until you do, Security and the main screen remind you.',
+      'All keys, proofs and payments are made by the official Zcash core (librustzcash), the same code other Zcash wallets use. Zecky’s own code only connects to it. The engine build is public, and the app checks it against fixed checksums.',
     ],
   },
   {
     title: 'Keys to the lock',
-    summary: 'Up to four keys: you choose.',
+    summary: 'Up to four checks before Zcash leaves. You choose.',
     icon: 'person',
     keys: [
       {
         title: 'Opening Zecky',
-        text: 'Face ID or the iPhone passcode, or your 4-digit Zecky code, each time Zecky opens.',
+        text: 'Face ID, the iPhone passcode or your 4-digit Zecky code, each time Zecky opens.',
       },
       {
         title: 'Opening the lock',
-        text: 'Face ID, the passcode or the Zecky code once more, before the lock opens.',
+        text: 'The same check once more, before the lock opens.',
       },
       {
         title: 'Really open the lock?',
-        text: 'A question with a tick and a 10, 5 or 3-second wait: a pause for when someone is rushing you.',
+        text: 'A question and a 10, 5 or 3-second wait, for when someone is rushing you.',
       },
       {
         title: 'Security key',
-        text: 'A physical key, such as a YubiKey, tapped against your iPhone before each release. Tapping it sends the release.',
+        text: 'A key such as a YubiKey, tapped against your iPhone. The tap sends the payment.',
       },
     ],
     points: [
-      'Set them in Settings › Security › Keys to the lock. Use all four, or fewer.',
-      'Showing the recovery phrase or the viewing key and erasing the wallet always ask, whatever you choose.',
+      'Set them in Settings › Security › Keys to the lock.',
+      'Showing the 24 words or the viewing key, and erasing the wallet, always ask.',
+    ],
+    more: [
       'Making any of this easier, or choosing a new Zecky code, first asks that it’s you.',
       'A security key is checked on this phone against the key Zecky saved when you added it. Nothing goes over the internet, nothing about you is stored on the key, and Zecky does not show in the key’s own list of logins.',
       'Adding another key, removing one or switching off its other uses first asks one of your keys. Add a backup key and keep it in another place.',
       'Lost all your keys? Remove them after 48 hours, counted on both the Zcash network and the phone’s clock; tapping a key cancels it. Restoring from your 24 words never asks a key.',
-      'You can also have a key asked before the recovery phrase is shown. Then losing every key and your paper means the Zcash is gone.',
-      'The key guards releasing from this phone. Whoever has your 24 words can still move the Zcash with another wallet, so keep the paper safe.',
-      'The Zecky code is a screen lock, not encryption, and a forgotten code can’t be reset. Without an iPhone passcode or a Zecky code there is nothing to ask, so the phrase is not protected.',
-    ],
-  },
-  {
-    title: 'Your keys, your Zcash',
-    summary: '24 words, made and kept on this phone.',
-    icon: 'eyeOff',
-    points: [
-      'Your Zcash is controlled by a recovery phrase of 24 words, created on this phone.',
-      'The words come from the phone’s secure random generator, checked and mixed with a second source. If that generator isn’t working, Zecky won’t create a wallet.',
-      'The phrase stays in the phone’s secure storage and is never sent anywhere. Nobody else has a copy, so nobody can recover it for you.',
-      'Zecky asks for three of the words to check your paper. Until you do, Security and the main screen remind you.',
-      'Whoever has the 24 words has the Zcash. Lose both the words and this phone, and it is gone for good.',
+      'You can also have a key asked before the 24 words are shown. Then losing every key and your paper means the Zcash is gone.',
+      'The key guards sending from this phone. Whoever has your 24 words can still move the Zcash with another wallet, so keep the paper safe.',
+      'The Zecky code is a screen lock, not encryption, and a forgotten code can’t be reset. Without an iPhone passcode or a Zecky code there is nothing to ask, so the 24 words are not protected.',
     ],
   },
   {
@@ -80,9 +108,12 @@ const CHAPTERS: {
     summary: 'Amounts, senders and addresses stay hidden.',
     icon: 'eye',
     points: [
-      'Lock more uses shielded addresses: the amount, the sender and the receiver are encrypted on the blockchain. A shielded address is safe to share; only your 24 words must stay secret.',
-      'Each address is shown until it is paid; then a fresh one appears, so payments can’t be linked. All of them lead to this same lock.',
-      'The transparent address is for senders who can’t pay a shielded one. It works like Bitcoin: its payments are visible to everyone until you lock them in.',
+      'Receive gives you a shielded address: amount, sender and receiver are encrypted on the blockchain.',
+      'A shielded address is safe to share. Once it is paid, a fresh one appears, so payments can’t be linked.',
+      'The transparent address is only for senders that can’t pay a shielded one. Its payments are public until you lock them in.',
+    ],
+    more: [
+      'All your addresses lead to this same lock.',
       'A viewing key shows everything in this wallet but can’t spend. Sharing it can’t be undone.',
       'Zcash keeps funds in pools. Settings › About shows yours: Ironwood, where new Zcash locks in since NU6.3 (July 2026); Orchard, which Zcash can only leave since then; Sapling; and the public Transparent pool. The oldest pool, Sprout, is closed to new Zcash and not used by Zecky.',
     ],
@@ -92,35 +123,30 @@ const CHAPTERS: {
     summary: 'The server, the price and Tor.',
     icon: 'globe',
     points: [
-      'Zecky reads the blockchain through a Zcash server. It sees your internet address and that a wallet is syncing, never your balance or shielded addresses, and it can’t move your Zcash.',
+      'Zecky reads the blockchain through a server. It sees your internet address, never your balance or addresses, and it can’t move your Zcash.',
+      'Tor (Settings › Network) hides your internet address when you send and when Zecky looks things up.',
+      'Your own node (Rock it) gives the most privacy.',
+    ],
+    more: [
       'Pick another server, or your own, under Network. Saved servers and their names stay on this phone.',
-      'Public servers always use an encrypted connection. Your own node (Rock it) on a home-network address stays inside your home network, or is encrypted by Tailscale. Only the Tailscale name (…ts.net) from your Rock it code also proves the node is yours: a home-network address or a Tailscale number cannot be checked, so use those at home only. The status line says which one you are on.',
+      'Public servers always use an encrypted connection. Your own node on a home-network address stays inside your home network, or is encrypted by Tailscale. Only the Tailscale name (…ts.net) from your Rock it code also proves the node is yours: a home-network address or a Tailscale number cannot be checked, so use those at home only. The status line names them.',
       'Whether you are online comes from iOS itself. Only with Rock it on mobile data does Zecky ask your node every 15 seconds whether it answers.',
-      'With Tor on, releases, looking up your payments, chain checks and the price go through Tor, which hides your internet address. Downloading blocks stays direct. While Tor is still connecting or could not connect, Zecky releases and locks in nothing. If one Tor connection fails, a release is tried again at once through a fresh one.',
-      'With your own node (Rock it), Zecky talks to it directly, also with Tor on: the node is yours, and a Tor connection could not reach a home or Tailscale address. A …ts.net address typed by hand is not counted as your node, so Tor stays on for it. The price still goes through Tor. Your node passes releases on to the Zcash network from your home connection.',
+      'With Tor on, sending, looking up your payments, chain checks and the price go through Tor. Downloading blocks stays direct. While Tor is still connecting or could not connect, Zecky sends and locks in nothing. If one Tor connection fails, a payment is tried again at once through a fresh one.',
+      'With your own node, Zecky talks to it directly, also with Tor on: the node is yours, and a Tor connection could not reach a home or Tailscale address. A …ts.net address typed by hand is not counted as your node, so Tor stays on for it. The price still goes through Tor. Your node passes payments on to the Zcash network from your home connection.',
       'Zecky asks a price service only after you choose a currency under Display. Without Tor that service sees your internet address, never your balance or addresses. Choose None for no price requests.',
-      'A release to a transparent address is public: its amount and destination.',
     ],
   },
   {
-    title: 'Balances, fees and waiting',
-    summary: 'What you see while things settle.',
-    icon: 'arrowDown',
-    points: [
-      'While Zecky starts, syncs or is offline, it shows the last confirmed balance. The status at the bottom says so.',
-      'New Zcash needs 10 confirmations before it can be used, and your own change after a release needs 3. Since the NU7 upgrade (November 2026) a block comes every 25 seconds, so that is about 4 minutes and about 1 minute. It counts in your balance right away, with a note until it is usable. Release shows what can be used now.',
-      'Each release pays a small network fee, shown on the receipt before you confirm. Zecky adds no fee of its own.',
-      'A release can’t be reversed or cancelled.',
-      'A payment of 5,000 zats or less costs more in fees to use than it is worth. It shows in Activity but isn’t counted in your balance.',
-    ],
-  },
-  {
-    title: 'What is kept on this phone',
+    title: 'On this phone',
     summary: 'Where your data lives.',
     icon: 'settings',
     points: [
+      'Your 24 words, code, contacts and history stay on this iPhone, left out of iCloud and computer backups.',
+      'Erase wallet (Settings › Security) removes everything from this phone. Your 24 words bring it back.',
+    ],
+    more: [
       'The recovery phrase, the Zecky code, your security keys’ public keys, your contacts, your receive addresses and your last known balance are in the phone’s secure storage, on this device only.',
-      'Your history is kept in a database on this phone, left out of iCloud and computer backups. For a release that isn’t confirmed yet, the time it was sent is kept until it is.',
+      'Your history is kept in a database on this phone. For a payment that isn’t confirmed yet, the time it was sent is kept until it is.',
       'Only Apple’s own keyboard works inside Zecky, so a keyboard from another app can’t record what you type.',
       'Notes on payments show as plain text, and a note with a link gets a warning.',
       'iOS keeps an app’s secure storage after the app is deleted, so a new install of Zecky first removes what an earlier one left, the recovery phrase included. Erase wallet removes it without deleting the app, and resets every setting, servers included.',
@@ -133,8 +159,8 @@ const CHAPTERS: {
     points: [
       'No account, no email address, no sign-up.',
       'No analytics, tracking or advertising.',
-      'It never asks for your 24 words, except on the restore screen when you restore a wallet yourself. The check after creating a wallet only asks you to pick three.',
-      'It can’t freeze, reverse or recover payments, and neither can anyone on its behalf.',
+      'It never asks for your 24 words, except when you restore a wallet yourself.',
+      'It can’t freeze, reverse or recover payments, and neither can anyone else.',
     ],
   },
   {
@@ -152,6 +178,13 @@ export function HowItWorksPage() {
   const styles = useStyles();
   const colors = useColors();
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [moreOpen, setMoreOpen] = useState<Set<string>>(new Set());
+  const toggleMore = (title: string) => {
+    LayoutAnimation.configureNext(
+      LayoutAnimation.create(220, 'easeInEaseOut', 'opacity'),
+    );
+    setMoreOpen(prev => new Set(prev).add(title));
+  };
   const toggle = (title: string) => {
     LayoutAnimation.configureNext(
       LayoutAnimation.create(220, 'easeInEaseOut', 'opacity'),
@@ -166,7 +199,6 @@ export function HowItWorksPage() {
 
   return (
     <>
-      <Text style={styles.intro}>Tap a chapter to open it.</Text>
       {CHAPTERS.map(chapter => {
         const isOpen = open.has(chapter.title);
         return (
@@ -207,6 +239,28 @@ export function HowItWorksPage() {
                     <Text style={styles.text}>{point}</Text>
                   </View>
                 ))}
+                {chapter.more != null &&
+                  (moreOpen.has(chapter.title) ? (
+                    <View style={styles.more}>
+                      {chapter.more.map(point => (
+                        <View key={point} style={styles.point}>
+                          <View style={[styles.bullet, styles.bulletQuiet]} />
+                          <Text style={[styles.text, styles.textQuiet]}>
+                            {point}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Pressable
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => toggleMore(chapter.title)}
+                      style={styles.moreLink}
+                    >
+                      <Text style={styles.moreLinkText}>More detail ›</Text>
+                    </Pressable>
+                  ))}
               </View>
             )}
           </View>
@@ -217,16 +271,12 @@ export function HowItWorksPage() {
 }
 
 const useStyles = makeStyles(colors => ({
-  intro: {
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.textMuted,
-  },
+  // An engraved brass plate per chapter, as on Lock more and Release.
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.gold + '38',
     marginTop: space.sm + 2,
     overflow: 'hidden',
   },
@@ -269,6 +319,20 @@ const useStyles = makeStyles(colors => ({
     paddingTop: 4,
   },
   point: { flexDirection: 'row', marginTop: space.sm },
+  more: {
+    marginTop: space.sm,
+    paddingTop: 2,
+    borderTopWidth: 0.5,
+    borderTopColor: colors.line,
+  },
+  moreLink: { marginTop: space.md, alignSelf: 'flex-start' },
+  moreLinkText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    color: colors.gold,
+  },
+  bulletQuiet: { backgroundColor: colors.goldDim },
+  textQuiet: { fontSize: 13, lineHeight: 20 },
   key: {
     flexDirection: 'row',
     marginTop: space.sm + 2,
@@ -313,7 +377,7 @@ const useStyles = makeStyles(colors => ({
     flex: 1,
     fontFamily: fonts.sans,
     fontSize: 14,
-    lineHeight: 21,
+    lineHeight: 22,
     color: colors.textMuted,
   },
 }));

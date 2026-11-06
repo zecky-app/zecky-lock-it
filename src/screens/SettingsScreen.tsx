@@ -12,13 +12,15 @@ import {
   View,
 } from 'react-native';
 import { Button } from '../components/Button';
-import { SheetCorner, SheetHeader } from '../components/lock';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RoomHeader, SheetCorner, SheetHeader } from '../components/lock';
 import { Icon, IconName } from '../components/Icon';
 import { BirthdayNote } from '../components/BirthdayNote';
 import { PhraseGrid } from '../components/PhraseGrid';
 import { PinPad } from '../components/PinPad';
 import { CURRENCIES, Currency, NETWORK } from '../config';
-import { about } from '../lib/about';
+import { about, ENGINE_RELEASE } from '../lib/about';
+import { NU7_HEIGHT, blockSeconds } from '../lib/upgrades';
 import {
   clearPin,
   secondsUntilRetry,
@@ -67,7 +69,7 @@ import { eraseWallet } from '../lib/erase';
 import { PhraseCheck } from '../components/PhraseCheck';
 import { PhraseConfirmed } from '../components/PhraseConfirmed';
 import { setPhraseUnconfirmed, usePhraseUnconfirmed } from '../lib/phraseCheck';
-import { serverLabel, useServer } from '../lib/server';
+import { useServer } from '../lib/server';
 import { TorStatus, useTorWanted } from '../lib/tor';
 import { ContactsPage } from './settings/ContactsPage';
 import { HowItWorksPage } from './settings/HowItWorksPage';
@@ -171,20 +173,33 @@ const TITLES: Record<Page, string> = {
 };
 
 const SUBTITLES: Record<Page, string> = {
-  menu: 'Make Zecky Lock it yours.',
-  about: 'Versions and details of this install.',
+  menu: '',
+  about: 'This install of Zecky Lock it.',
   display: 'How amounts and colors look.',
   security: 'Who can open Zecky and the lock.',
-  keys: 'Everything that lets you in or opens the lock, in one place.',
+  keys: 'Everything that lets you in or opens the lock.',
   openwait: 'A question and a short wait, for when someone is rushing you.',
-  seckey: 'A key you tap against your iPhone before releasing.',
+  seckey: 'A key you tap against your iPhone before sending.',
   phrase: 'The 24 words that restore your Zcash on any phone.',
   viewkey: 'See-only access, for an accountant or a watch-only device.',
   erase: 'Remove the wallet from this iPhone.',
-  how: 'What happens with your Zcash, keys and data.',
-  contacts: 'Addresses you release to often.',
-  server: 'How Zecky reaches the Zcash network.',
+  how: 'Your Zcash, keys and data, chapter by chapter.',
+  contacts: 'Addresses you send to often.',
+  server: 'The server Zecky reads the blockchain from.',
 };
+
+/** How fast blocks come, and when NU7 arrives while it is still ahead. */
+function chainLine(height: number): string {
+  if (height >= NU7_HEIGHT) return 'A block every 25 seconds, since NU7';
+  const minutes = Math.round(
+    ((NU7_HEIGHT - height) * blockSeconds(height)) / 60,
+  );
+  const when =
+    minutes < 90
+      ? `about ${Math.max(1, minutes)} minutes`
+      : `about ${Math.round(minutes / 60)} hours`;
+  return `A block every 75 seconds · NU7 in ${when}`;
+}
 
 function MenuRow(props: {
   label: string;
@@ -235,10 +250,10 @@ function MenuRow(props: {
   );
 }
 
-function Line(props: { label: string; value: string }) {
+function Line(props: { label: string; value: string; last?: boolean }) {
   const styles = useStyles();
   return (
-    <View style={styles.line}>
+    <View style={[styles.line, props.last !== true && styles.divider]}>
       <Text style={styles.lineLabel}>{props.label}</Text>
       <Text style={styles.lineValue} selectable>
         {props.value}
@@ -319,7 +334,9 @@ export function SettingsScreen({
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
+  const insets = useSafeAreaInsets();
   const [page, setPage] = useState<Page>('menu');
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [phrase, setPhrase] = useState<string | null>(null);
   const [phraseError, setPhraseError] = useState<string | null>(null);
@@ -589,882 +606,924 @@ export function SettingsScreen({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
+      animationType="fade"
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
-        <SheetCorner />
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          automaticallyAdjustKeyboardInsets
-        >
-          <SheetHeader title={TITLES[page]} subtitle={SUBTITLES[page]} />
+      <View
+        style={[
+          styles.safe,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
+        <View style={styles.container}>
+          {page !== 'menu' && <SheetCorner />}
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            keyboardShouldPersistTaps="handled"
+            automaticallyAdjustKeyboardInsets
+            showsVerticalScrollIndicator={false}
+          >
+            {page === 'menu' ? (
+              <RoomHeader open={false} compact title="Settings" />
+            ) : (
+              <SheetHeader title={TITLES[page]} subtitle={SUBTITLES[page]} />
+            )}
 
-          {page === 'menu' && (
-            <>
-              <View style={styles.card}>
-                <MenuRow
-                  icon="globe"
-                  label="Network"
-                  value={tor === 'on' ? `${server.host}, Tor` : server.host}
-                  onPress={() => setPage('server')}
-                />
-                <MenuRow
-                  icon="sun"
-                  label="Display"
-                  value={[
-                    THEME_LABELS[themeMode],
-                    unit,
-                    currency == null ? null : torWanted ? 'USD' : currency,
-                  ]
-                    .filter(Boolean)
-                    .join(', ')}
-                  onPress={() => setPage('display')}
-                />
-                <MenuRow
-                  icon="lock"
-                  label="Security"
-                  value={pinEnabled ? 'Zecky code' : 'Face ID'}
-                  onPress={() => setPage('security')}
-                />
-                <MenuRow
-                  icon="person"
-                  label="Contacts"
-                  value={contacts.length === 0 ? '' : String(contacts.length)}
-                  onPress={() => setPage('contacts')}
-                  last
-                />
-              </View>
-              <View style={styles.card}>
-                <MenuRow
-                  icon="eye"
-                  label="How Zecky works"
-                  value=""
-                  onPress={() => setPage('how')}
-                />
-                <MenuRow
-                  icon="info"
-                  label="About"
-                  value={`Version ${about.appVersion}`}
-                  onPress={() => setPage('about')}
-                  last
-                />
-              </View>
-            </>
-          )}
-
-          {page === 'about' && (
-            <>
-              <View style={styles.card}>
-                <Line
-                  label="Zecky Lock it"
-                  value={`Version ${about.appVersion}`}
-                />
-                <Line label="Zcash engine" value={about.zcashEngine} />
-                <Line label="Network" value={NETWORK} />
-                <Line label="Server" value={serverLabel(server)} />
-                <Line
-                  label="Wallet birthday"
-                  value={`Block ${birthdayHeight.toLocaleString('en-US')}`}
-                />
-                <Line label="System" value={about.system} />
-                <Line label="React Native" value={about.reactNative} />
-              </View>
-
-              <Text style={styles.section}>Your Zcash by pool</Text>
-              <View style={styles.card}>
-                {POOLS.map((pool, i) => {
-                  const b = pools?.[pool.key];
-                  const total = b?.total ?? '0';
-                  const confirming =
-                    b != null && BigInt(b.available) < BigInt(b.total);
-                  return (
-                    <View
-                      key={pool.key}
-                      style={[
-                        styles.line,
-                        i < POOLS.length - 1 && styles.divider,
-                      ]}
-                    >
-                      <View style={styles.lineText}>
-                        <Text style={styles.lineLabel}>{pool.name}</Text>
-                        <Text style={styles.lineHint}>{pool.about}</Text>
-                      </View>
-                      <View style={styles.poolValue}>
-                        <Text style={styles.poolAmount}>
-                          {pools == null
-                            ? '…'
-                            : hidden
-                            ? '••••'
-                            : formatExact(total, unit)}
-                        </Text>
-                        {confirming && !hidden && (
-                          <Text style={styles.poolSub}>
-                            {formatExact(b.available, unit)} usable now
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-              <Text style={styles.info}>
-                Together they make up your balance. New Zcash locks into
-                Ironwood. The oldest pool, Sprout, is closed to new Zcash and is
-                not used by Zecky.
-              </Text>
-            </>
-          )}
-
-          {page === 'display' && (
-            <>
-              <View style={styles.card}>
-                <View style={styles.line}>
-                  <Text style={styles.lineLabel}>Theme</Text>
-                  <View style={styles.unitSwitch}>
-                    {THEME_MODES.map(m => (
-                      <Pressable
-                        key={m}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: m === themeMode }}
-                        onPress={() => setThemeMode(m)}
-                      >
-                        <Text
-                          style={[
-                            styles.unitOption,
-                            m === themeMode && styles.unitOn,
-                          ]}
-                        >
-                          {THEME_LABELS[m]}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              </View>
-              <View style={styles.card}>
-                <View style={styles.line}>
-                  <Text style={styles.lineLabel}>Show amounts in</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Amounts in ${unit}. Tap to switch`}
-                    onPress={onToggleUnit}
-                    style={styles.unitSwitch}
-                  >
-                    {(['ZEC', 'zats'] as const).map(u => (
-                      <Text
-                        key={u}
-                        style={[styles.unitOption, u === unit && styles.unitOn]}
-                      >
-                        {u}
-                      </Text>
-                    ))}
-                  </Pressable>
-                </View>
-                <View style={styles.line}>
-                  <View style={styles.lineText}>
-                    <Text style={styles.lineLabel}>Hide amounts</Text>
-                    <Text style={styles.lineHint}>
-                      Covers your balance and payment amounts on the main
-                      screen.
+            {page === 'menu' && (
+              <>
+                <View style={[styles.card, styles.chain]}>
+                  <Text style={styles.chainLabel}>ZCASH NETWORK</Text>
+                  <Text style={styles.chainBlock}>
+                    {networkHeight > 0
+                      ? `Block ${networkHeight.toLocaleString('en-US')}`
+                      : 'Catching up…'}
+                  </Text>
+                  {networkHeight > 0 && (
+                    <Text style={styles.chainSub}>
+                      {chainLine(networkHeight)}
                     </Text>
-                  </View>
-                  <Switch
-                    value={hidden}
-                    onValueChange={onToggleHidden}
-                    trackColor={{ true: colors.gold, false: colors.line }}
-                    ios_backgroundColor={colors.line}
+                  )}
+                </View>
+                <View style={styles.card}>
+                  <MenuRow
+                    icon="globe"
+                    label="Network"
+                    value={tor === 'on' ? `${server.host}, Tor` : server.host}
+                    onPress={() => setPage('server')}
+                  />
+                  <MenuRow
+                    icon="sun"
+                    label="Display"
+                    value={[
+                      THEME_LABELS[themeMode],
+                      unit,
+                      currency == null ? null : torWanted ? 'USD' : currency,
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                    onPress={() => setPage('display')}
+                  />
+                  <MenuRow
+                    icon="lock"
+                    label="Security"
+                    value={pinEnabled ? 'Zecky code' : 'Face ID'}
+                    onPress={() => setPage('security')}
+                  />
+                  <MenuRow
+                    icon="person"
+                    label="Contacts"
+                    value={contacts.length === 0 ? '' : String(contacts.length)}
+                    onPress={() => setPage('contacts')}
+                    last
                   />
                 </View>
-              </View>
-              <Text style={styles.section}>Currency conversion</Text>
-              <View style={styles.card}>
-                <View style={styles.chips}>
-                  {([...CURRENCIES, null] as const).map(c => {
-                    const on = c === currency;
+                <View style={styles.card}>
+                  <MenuRow
+                    icon="eye"
+                    label="How Zecky works"
+                    value=""
+                    onPress={() => setPage('how')}
+                  />
+                  <MenuRow
+                    icon="info"
+                    label="About"
+                    value=""
+                    onPress={() => setPage('about')}
+                    last
+                  />
+                </View>
+              </>
+            )}
+
+            {page === 'about' && (
+              <>
+                <View style={styles.card}>
+                  <Line
+                    label="Zecky Lock it"
+                    value={`Version ${about.appVersion}`}
+                  />
+                  <Line label="Zcash engine" value={about.engine} />
+                  <Line
+                    label="Wallet birthday"
+                    value={`Block ${birthdayHeight.toLocaleString('en-US')}`}
+                    last
+                  />
+                </View>
+
+                <Text style={styles.section}>Your Zcash by pool</Text>
+                <View style={styles.card}>
+                  {POOLS.map((pool, i) => {
+                    const b = pools?.[pool.key];
+                    const total = b?.total ?? '0';
+                    const confirming =
+                      b != null && BigInt(b.available) < BigInt(b.total);
                     return (
-                      <Pressable
-                        key={c ?? 'none'}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: on }}
-                        onPress={() => onChooseCurrency(c)}
-                        style={[styles.chip, on && styles.chipOn]}
+                      <View
+                        key={pool.key}
+                        style={[
+                          styles.line,
+                          i < POOLS.length - 1 && styles.divider,
+                        ]}
                       >
-                        <Text
-                          style={[styles.chipLabel, on && styles.chipLabelOn]}
-                        >
-                          {c ?? 'None'}
-                        </Text>
-                      </Pressable>
+                        <Text style={styles.lineLabel}>{pool.name}</Text>
+                        <View style={styles.poolValue}>
+                          <Text style={styles.poolAmount}>
+                            {pools == null
+                              ? '…'
+                              : hidden
+                              ? '••••'
+                              : formatExact(total, unit)}
+                          </Text>
+                          {confirming && !hidden && (
+                            <Text style={styles.poolSub}>
+                              {formatExact(b.available, unit)} usable now
+                            </Text>
+                          )}
+                        </View>
+                      </View>
                     );
                   })}
                 </View>
-                <Text style={styles.currencyHint}>
-                  {torWanted
-                    ? 'Tor is on, so the price is fetched through Tor by the Zcash engine and no price service sees your internet address. That source only offers USD, so USD is shown whatever is chosen here. Choose None to make no price requests at all.'
-                    : 'Shows your balance in this currency on the main screen. The price comes from CoinGecko; your balance and addresses are never sent. Choose None to make no price requests at all.'}
-                </Text>
-              </View>
-            </>
-          )}
+                <Text style={styles.quiet}>New Zcash locks into Ironwood.</Text>
 
-          {page === 'how' && <HowItWorksPage />}
-          {page === 'contacts' && <ContactsPage />}
-          {page === 'server' && <ServerPage tor={tor} />}
-
-          {page === 'security' && (
-            <>
-              <View style={styles.card}>
-                <MenuRow
-                  icon="lock"
-                  label="Keys to the lock"
-                  value={
-                    (pinEnabled ? 'Zecky code' : 'Face ID') +
-                    (keyCount > 0 ? ' + key' : '')
-                  }
-                  onPress={() => setPage('keys')}
-                />
-                <MenuRow
-                  icon="eyeOff"
-                  label="Recovery phrase"
-                  value={phraseUnconfirmed ? 'Not confirmed' : 'View'}
-                  onPress={() => setPage('phrase')}
-                />
-                <MenuRow
-                  icon="eye"
-                  label="Viewing key"
-                  value="View"
-                  onPress={() => setPage('viewkey')}
-                  last
-                />
-              </View>
-              <View style={[styles.card, styles.dangerCard]}>
-                <MenuRow
-                  icon="info"
-                  label="Erase wallet"
-                  value=""
-                  onPress={() => setPage('erase')}
-                  danger
-                  last
-                />
-              </View>
-            </>
-          )}
-
-          {page === 'keys' && flow == null && (
-            <>
-              <Text style={styles.info}>
-                Making it easier always asks that it is you first.
-              </Text>
-
-              <Text style={styles.section}>Your keys, in order</Text>
-              <View style={styles.card}>
-                <KeyRow
-                  number={1}
-                  label="Opening Zecky"
-                  hint={
-                    askStart ? 'Asks that it is you' : 'Opens straight away'
-                  }
-                  toggle={{
-                    value: askStart,
-                    onChange: next =>
-                      needsOwner({ kind: 'ask', from: askStart, to: next })
-                        ? whenOwner(() => setAskAt('start', next))
-                        : setAskAt('start', next),
-                  }}
-                />
-                <KeyRow
-                  number={2}
-                  label="Opening the lock"
-                  hint={
-                    askOpenLock
-                      ? 'Asks that it is you'
-                      : 'No check that it is you'
-                  }
-                  toggle={{
-                    value: askOpenLock,
-                    onChange: next =>
-                      needsOwner({ kind: 'ask', from: askOpenLock, to: next })
-                        ? whenOwner(() => setAskAt('openLock', next))
-                        : setAskAt('openLock', next),
-                  }}
-                />
-                <KeyRow
-                  number={3}
-                  label="Really open the lock?"
-                  hint="A question and a short wait"
-                  value={WAIT_SHORT[openWait]}
-                  onPress={() => setPage('openwait')}
-                />
-                <KeyRow
-                  number={4}
-                  label="Security key"
-                  hint="Tapped before releasing"
-                  value={
-                    keysState.removal != null
-                      ? 'Removing'
-                      : keyCount === 0
-                      ? 'Not added'
-                      : keyCount === 1
-                      ? '1 key'
-                      : `${keyCount} keys`
-                  }
-                  onPress={() => setPage('seckey')}
-                  last
-                />
-              </View>
-              {openWait === 0 && !askOpenLock && (
-                <Text style={styles.info}>
-                  Right now one tap opens the lock.
-                </Text>
-              )}
-
-              <Text style={styles.section}>Check it’s you with</Text>
-              <View style={styles.card}>
-                <Pressable
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: !pinEnabled }}
-                  onPress={() => pinEnabled && setFlow({ kind: 'off' })}
-                  style={({ pressed }) => [
-                    styles.line,
-                    styles.divider,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <View style={styles.lineText}>
-                    <Text style={styles.lineLabel}>
-                      Face ID or iPhone passcode
-                    </Text>
-                    <Text style={styles.lineHint}>
-                      The iPhone’s own lock. Nothing extra to remember.
-                    </Text>
-                  </View>
-                  {!pinEnabled && <Text style={styles.check}>✓</Text>}
-                </Pressable>
-                <Pressable
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: pinEnabled }}
-                  onPress={() =>
-                    // A new code could later switch every check off, so
-                    // choosing one first asks Face ID or the passcode.
-                    !pinEnabled &&
-                    needsOwner({ kind: 'newCode' }) &&
-                    whenOwner(() => setFlow({ kind: 'set' }))
-                  }
-                  style={({ pressed }) => [
-                    styles.line,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <View style={styles.lineText}>
-                    <Text style={styles.lineLabel}>Zecky code</Text>
-                    <Text style={styles.lineHint}>
-                      4 digits, only for Zecky. A forgotten code cannot be
-                      reset: you would restore from the 24 words.
-                    </Text>
-                  </View>
-                  {pinEnabled && <Text style={styles.check}>✓</Text>}
-                </Pressable>
-              </View>
-              {pinEnabled && (
                 <Pressable
                   accessibilityRole="button"
-                  hitSlop={10}
-                  onPress={() => setFlow({ kind: 'change', verified: false })}
-                  style={styles.inlineLink}
+                  accessibilityState={{ expanded: detailsOpen }}
+                  hitSlop={8}
+                  onPress={() => setDetailsOpen(o => !o)}
+                  style={styles.disclosure}
                 >
-                  <Text style={styles.inlineLinkText}>Change code</Text>
+                  <Text style={styles.disclosureText}>
+                    Technical details {detailsOpen ? '‹' : '›'}
+                  </Text>
                 </Pressable>
-              )}
-              {!pinEnabled && !hasPasscode && (
-                <Text style={styles.warning}>
-                  This iPhone has no passcode, so there is nothing to ask. Set
-                  one in the iPhone’s Settings, or choose a Zecky code.
-                </Text>
-              )}
+                {detailsOpen && (
+                  <View style={styles.card}>
+                    <Line label="Network" value={NETWORK} />
+                    <Line label="Engine release" value={ENGINE_RELEASE} />
+                    <Line
+                      label="react-native-zcash"
+                      value={about.zcashEngine}
+                    />
+                    <Line label="System" value={about.system} />
+                    <Line label="React Native" value={about.reactNative} last />
+                  </View>
+                )}
+              </>
+            )}
 
-              <Text style={styles.info}>
-                Always asked: showing the recovery phrase, showing the viewing
-                key and erasing the wallet.
-                {keysState.phraseNeedsKey
-                  ? ' The recovery phrase also asks your security key.'
-                  : ''}
-              </Text>
-            </>
-          )}
+            {page === 'display' && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.line}>
+                    <Text style={styles.lineLabel}>Theme</Text>
+                    <View style={styles.unitSwitch}>
+                      {THEME_MODES.map(m => (
+                        <Pressable
+                          key={m}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: m === themeMode }}
+                          onPress={() => setThemeMode(m)}
+                        >
+                          <Text
+                            style={[
+                              styles.unitOption,
+                              m === themeMode && styles.unitOn,
+                            ]}
+                          >
+                            {THEME_LABELS[m]}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.card}>
+                  <View style={styles.line}>
+                    <Text style={styles.lineLabel}>Show amounts in</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Amounts in ${unit}. Tap to switch`}
+                      onPress={onToggleUnit}
+                      style={styles.unitSwitch}
+                    >
+                      {(['ZEC', 'zats'] as const).map(u => (
+                        <Text
+                          key={u}
+                          style={[
+                            styles.unitOption,
+                            u === unit && styles.unitOn,
+                          ]}
+                        >
+                          {u}
+                        </Text>
+                      ))}
+                    </Pressable>
+                  </View>
+                  <View style={styles.line}>
+                    <View style={styles.lineText}>
+                      <Text style={styles.lineLabel}>Hide amounts</Text>
+                      <Text style={styles.lineHint}>
+                        Covers your balance and payment amounts on the main
+                        screen.
+                      </Text>
+                    </View>
+                    <Switch
+                      value={hidden}
+                      onValueChange={onToggleHidden}
+                      trackColor={{ true: colors.gold, false: colors.line }}
+                      ios_backgroundColor={colors.line}
+                    />
+                  </View>
+                </View>
+                <Text style={styles.section}>Currency conversion</Text>
+                <View style={styles.card}>
+                  <View style={styles.chips}>
+                    {([...CURRENCIES, null] as const).map(c => {
+                      const on = c === currency;
+                      return (
+                        <Pressable
+                          key={c ?? 'none'}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: on }}
+                          onPress={() => onChooseCurrency(c)}
+                          style={[styles.chip, on && styles.chipOn]}
+                        >
+                          <Text
+                            style={[styles.chipLabel, on && styles.chipLabelOn]}
+                          >
+                            {c ?? 'None'}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.currencyHint}>
+                    {torWanted
+                      ? 'With Tor on, the price comes through Tor in USD only. None makes no price requests.'
+                      : 'Price from CoinGecko. Nothing about your wallet is sent. None makes no price requests.'}
+                  </Text>
+                </View>
+              </>
+            )}
 
-          {page === 'openwait' && flow == null && (
-            <>
-              <View style={styles.card}>
-                {OPEN_WAITS.map((w, i) => (
-                  <Pressable
-                    key={w}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: w === openWait }}
-                    onPress={() =>
-                      needsOwner({ kind: 'wait', from: openWait, to: w })
-                        ? whenOwner(() => setOpenWait(w))
-                        : setOpenWait(w)
+            {page === 'how' && <HowItWorksPage />}
+            {page === 'contacts' && <ContactsPage />}
+            {page === 'server' && <ServerPage tor={tor} />}
+
+            {page === 'security' && (
+              <>
+                <View style={styles.card}>
+                  <MenuRow
+                    icon="lock"
+                    label="Keys to the lock"
+                    value={
+                      (pinEnabled ? 'Zecky code' : 'Face ID') +
+                      (keyCount > 0 ? ' + key' : '')
                     }
+                    onPress={() => setPage('keys')}
+                  />
+                  <MenuRow
+                    icon="eyeOff"
+                    label="Recovery phrase"
+                    value={phraseUnconfirmed ? 'Not confirmed' : 'View'}
+                    onPress={() => setPage('phrase')}
+                  />
+                  <MenuRow
+                    icon="eye"
+                    label="Viewing key"
+                    value="View"
+                    onPress={() => setPage('viewkey')}
+                    last
+                  />
+                </View>
+                <View style={[styles.card, styles.dangerCard]}>
+                  <MenuRow
+                    icon="info"
+                    label="Erase wallet"
+                    value=""
+                    onPress={() => setPage('erase')}
+                    danger
+                    last
+                  />
+                </View>
+              </>
+            )}
+
+            {page === 'keys' && flow == null && (
+              <>
+                <Text style={styles.info}>
+                  Making it easier always asks that it is you first.
+                </Text>
+
+                <Text style={styles.section}>Your keys, in order</Text>
+                <View style={styles.card}>
+                  <KeyRow
+                    number={1}
+                    label="Opening Zecky"
+                    hint={
+                      askStart ? 'Asks that it is you' : 'Opens straight away'
+                    }
+                    toggle={{
+                      value: askStart,
+                      onChange: next =>
+                        needsOwner({ kind: 'ask', from: askStart, to: next })
+                          ? whenOwner(() => setAskAt('start', next))
+                          : setAskAt('start', next),
+                    }}
+                  />
+                  <KeyRow
+                    number={2}
+                    label="Opening the lock"
+                    hint={
+                      askOpenLock
+                        ? 'Asks that it is you'
+                        : 'No check that it is you'
+                    }
+                    toggle={{
+                      value: askOpenLock,
+                      onChange: next =>
+                        needsOwner({ kind: 'ask', from: askOpenLock, to: next })
+                          ? whenOwner(() => setAskAt('openLock', next))
+                          : setAskAt('openLock', next),
+                    }}
+                  />
+                  <KeyRow
+                    number={3}
+                    label="Really open the lock?"
+                    hint="A question and a short wait"
+                    value={WAIT_SHORT[openWait]}
+                    onPress={() => setPage('openwait')}
+                  />
+                  <KeyRow
+                    number={4}
+                    label="Security key"
+                    hint="Tapped before sending"
+                    value={
+                      keysState.removal != null
+                        ? 'Removing'
+                        : keyCount === 0
+                        ? 'Not added'
+                        : keyCount === 1
+                        ? '1 key'
+                        : `${keyCount} keys`
+                    }
+                    onPress={() => setPage('seckey')}
+                    last
+                  />
+                </View>
+                {openWait === 0 && !askOpenLock && (
+                  <Text style={styles.info}>
+                    Right now one tap opens the lock.
+                  </Text>
+                )}
+
+                <Text style={styles.section}>Check it’s you with</Text>
+                <View style={styles.card}>
+                  <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: !pinEnabled }}
+                    onPress={() => pinEnabled && setFlow({ kind: 'off' })}
                     style={({ pressed }) => [
                       styles.line,
-                      i < OPEN_WAITS.length - 1 && styles.divider,
+                      styles.divider,
                       pressed && styles.pressed,
                     ]}
                   >
-                    <Text style={styles.lineLabel}>{WAIT_LABELS[w]}</Text>
-                    {w === openWait && <Text style={styles.check}>✓</Text>}
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.info}>
-                The question and the short wait are there for when someone is
-                rushing you.
-                {openWait === 0 && !askOpenLock
-                  ? ' Right now one tap opens the lock.'
-                  : ''}
-              </Text>
-            </>
-          )}
-
-          {page === 'seckey' && flow == null && (
-            <>
-              {!keysSupported ? (
-                <Text style={styles.info}>
-                  This iPhone cannot use security keys.
-                </Text>
-              ) : (
-                <>
-                  {keyCount === 0 && (
-                    <Text style={styles.info}>
-                      Tap a security key, such as a YubiKey, against the top of
-                      your iPhone. From then on, releasing Zcash asks that key
-                      too. Nothing about you is stored on the key, and nothing
-                      goes over the internet.
-                    </Text>
-                  )}
-
-                  {keysState.removal != null && removalEnd != null && (
-                    <View style={[styles.card, styles.cardPad]}>
-                      <Text style={styles.lineLabel}>Removing all keys</Text>
-                      <Text style={styles.lineHint}>
-                        After {usDateTime(removalEnd)}, once the Zcash network
-                        also shows 48 hours. Until then, your keys are still
-                        asked.
+                    <View style={styles.lineText}>
+                      <Text style={styles.lineLabel}>
+                        Face ID or iPhone passcode
                       </Text>
+                      <Text style={styles.lineHint}>
+                        The iPhone’s own lock. Nothing extra to remember.
+                      </Text>
+                    </View>
+                    {!pinEnabled && <Text style={styles.check}>✓</Text>}
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: pinEnabled }}
+                    onPress={() =>
+                      // A new code could later switch every check off, so
+                      // choosing one first asks Face ID or the passcode.
+                      !pinEnabled &&
+                      needsOwner({ kind: 'newCode' }) &&
+                      whenOwner(() => setFlow({ kind: 'set' }))
+                    }
+                    style={({ pressed }) => [
+                      styles.line,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View style={styles.lineText}>
+                      <Text style={styles.lineLabel}>Zecky code</Text>
+                      <Text style={styles.lineHint}>
+                        4 digits, only for Zecky. A forgotten code cannot be
+                        reset: you would restore from the 24 words.
+                      </Text>
+                    </View>
+                    {pinEnabled && <Text style={styles.check}>✓</Text>}
+                  </Pressable>
+                </View>
+                {pinEnabled && (
+                  <Pressable
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={() => setFlow({ kind: 'change', verified: false })}
+                    style={styles.inlineLink}
+                  >
+                    <Text style={styles.inlineLinkText}>Change code</Text>
+                  </Pressable>
+                )}
+                {!pinEnabled && !hasPasscode && (
+                  <Text style={styles.warning}>
+                    This iPhone has no passcode, so there is nothing to ask. Set
+                    one in the iPhone’s Settings, or choose a Zecky code.
+                  </Text>
+                )}
+
+                <Text style={styles.info}>
+                  Always asked: showing the recovery phrase, showing the viewing
+                  key and erasing the wallet.
+                  {keysState.phraseNeedsKey
+                    ? ' The recovery phrase also asks your security key.'
+                    : ''}
+                </Text>
+              </>
+            )}
+
+            {page === 'openwait' && flow == null && (
+              <>
+                <View style={styles.card}>
+                  {OPEN_WAITS.map((w, i) => (
+                    <Pressable
+                      key={w}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: w === openWait }}
+                      onPress={() =>
+                        needsOwner({ kind: 'wait', from: openWait, to: w })
+                          ? whenOwner(() => setOpenWait(w))
+                          : setOpenWait(w)
+                      }
+                      style={({ pressed }) => [
+                        styles.line,
+                        i < OPEN_WAITS.length - 1 && styles.divider,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.lineLabel}>{WAIT_LABELS[w]}</Text>
+                      {w === openWait && <Text style={styles.check}>✓</Text>}
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={styles.info}>
+                  The question and the short wait are there for when someone is
+                  rushing you.
+                  {openWait === 0 && !askOpenLock
+                    ? ' Right now one tap opens the lock.'
+                    : ''}
+                </Text>
+              </>
+            )}
+
+            {page === 'seckey' && flow == null && (
+              <>
+                {!keysSupported ? (
+                  <Text style={styles.info}>
+                    This iPhone cannot use security keys.
+                  </Text>
+                ) : (
+                  <>
+                    {keyCount === 0 && (
+                      <Text style={styles.info}>
+                        Tap a security key, such as a YubiKey, against the top
+                        of your iPhone. From then on, sending Zcash asks that
+                        key too. Nothing about you is stored on the key, and
+                        nothing goes over the internet.
+                      </Text>
+                    )}
+
+                    {keysState.removal != null && removalEnd != null && (
+                      <View style={[styles.card, styles.cardPad]}>
+                        <Text style={styles.lineLabel}>Removing all keys</Text>
+                        <Text style={styles.lineHint}>
+                          After {usDateTime(removalEnd)}, once the Zcash network
+                          also shows 48 hours. Until then, your keys are still
+                          asked.
+                        </Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          hitSlop={10}
+                          disabled={keyBusy}
+                          onPress={() =>
+                            keyAction(cancelKeyRemoval, 'Removal cancelled ✓')
+                          }
+                          style={styles.inlineLink}
+                        >
+                          <Text style={styles.inlineLinkText}>
+                            Cancel with a key
+                          </Text>
+                        </Pressable>
+                      </View>
+                    )}
+
+                    {keyCount > 0 && (
+                      <View style={styles.card}>
+                        {keysState.keys.map((k, i) => (
+                          <View
+                            key={k.id}
+                            style={[
+                              styles.line,
+                              i < keyCount - 1 && styles.divider,
+                            ]}
+                          >
+                            <View style={styles.lineText}>
+                              <Text style={styles.lineLabel}>
+                                {k.role === 'backup'
+                                  ? 'Backup key'
+                                  : 'Security key'}
+                              </Text>
+                              <Text style={styles.lineHint}>
+                                Added {usDate(k.added)}
+                              </Text>
+                            </View>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove ${
+                                k.role === 'backup'
+                                  ? 'backup key'
+                                  : 'security key'
+                              }`}
+                              hitSlop={10}
+                              disabled={keyBusy}
+                              onPress={() =>
+                                keyAction(
+                                  () => removeSecurityKey(k.id),
+                                  'Key removed ✓',
+                                )
+                              }
+                            >
+                              <Text style={styles.inlineLinkText}>Remove</Text>
+                            </Pressable>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    {keyCount === 1 && keysState.removal == null && (
+                      <Text style={styles.info}>
+                        Add a backup key and keep it in another place. Without
+                        one, a lost key means a 48-hour wait or restoring from
+                        your 24 words.
+                      </Text>
+                    )}
+
+                    {keyMessage != null && (
+                      <Text
+                        style={keyMessage.error ? styles.warning : styles.info}
+                      >
+                        {keyMessage.text}
+                      </Text>
+                    )}
+
+                    {keysState.removal == null && (
+                      <View style={styles.reveal}>
+                        <Button
+                          label={
+                            keyCount === 0
+                              ? 'Add a security key'
+                              : keyCount === 1
+                              ? 'Add a backup key'
+                              : 'Add another key'
+                          }
+                          variant={keyCount < 2 ? 'primary' : 'quiet'}
+                          busy={keyBusy}
+                          onPress={() =>
+                            keyCount === 0
+                              ? whenOwner(() =>
+                                  keyAction(
+                                    () => addSecurityKey('main'),
+                                    'Key added ✓',
+                                  ),
+                                )
+                              : keyAction(
+                                  () => addSecurityKey('backup'),
+                                  'Backup key added ✓',
+                                )
+                          }
+                        />
+                        {keyCount > 0 && (
+                          <Text style={[styles.lineHint, styles.centered]}>
+                            First tap one of your keys, then the new one.
+                          </Text>
+                        )}
+                      </View>
+                    )}
+
+                    {keyCount > 0 && (
+                      <Button
+                        label="Test key"
+                        variant="quiet"
+                        disabled={keyBusy}
+                        onPress={() =>
+                          keyAction(checkSecurityKey, 'Your key works ✓')
+                        }
+                      />
+                    )}
+
+                    {keyCount > 0 && !phraseWarn && (
+                      <>
+                        <Text style={styles.section}>Recovery phrase</Text>
+                        <View style={styles.card}>
+                          <View style={styles.line}>
+                            <View style={styles.lineText}>
+                              <Text style={styles.lineLabel}>
+                                Also ask the key to show the recovery phrase
+                              </Text>
+                              <Text style={styles.lineHint}>
+                                {keysState.phraseNeedsKey
+                                  ? 'On: the words also need a key.'
+                                  : keyCount < PHRASE_KEY_MIN_KEYS
+                                  ? 'Needs a backup key first.'
+                                  : 'Off: Face ID or your code is enough.'}
+                              </Text>
+                            </View>
+                            <Switch
+                              accessibilityLabel="Also ask the key to show the recovery phrase"
+                              value={keysState.phraseNeedsKey}
+                              disabled={
+                                keyBusy ||
+                                (!keysState.phraseNeedsKey &&
+                                  keyCount < PHRASE_KEY_MIN_KEYS)
+                              }
+                              onValueChange={next =>
+                                next
+                                  ? setPhraseWarn(true)
+                                  : keyAction(
+                                      () => setPhraseNeedsKey(false),
+                                      'The recovery phrase no longer asks a key.',
+                                    )
+                              }
+                              trackColor={{
+                                true: colors.gold,
+                                false: colors.line,
+                              }}
+                              ios_backgroundColor={colors.line}
+                            />
+                          </View>
+                        </View>
+                      </>
+                    )}
+
+                    {phraseWarn && (
+                      <View
+                        style={[styles.card, styles.dangerCard, styles.cardPad]}
+                      >
+                        <Text style={styles.lineLabel}>
+                          Keep your 24 words on paper
+                        </Text>
+                        <Text style={styles.lineHint}>
+                          If you lose all your keys and the paper, your Zcash
+                          can no longer be recovered. The 48-hour removal still
+                          works while you have this iPhone.
+                        </Text>
+                        <View style={styles.reveal}>
+                          <Button
+                            label="Turn on"
+                            onPress={() => {
+                              setPhraseWarn(false);
+                              keyAction(
+                                () => setPhraseNeedsKey(true),
+                                'The recovery phrase now also asks a key ✓',
+                              );
+                            }}
+                          />
+                          <Button
+                            label="Cancel"
+                            variant="back"
+                            onPress={() => setPhraseWarn(false)}
+                          />
+                        </View>
+                      </View>
+                    )}
+
+                    {keyCount > 0 && keysState.removal == null && (
                       <Pressable
                         accessibilityRole="button"
                         hitSlop={10}
                         disabled={keyBusy}
                         onPress={() =>
-                          keyAction(cancelKeyRemoval, 'Removal cancelled ✓')
+                          whenOwner(() =>
+                            keyAction(
+                              () => startKeyRemoval(networkHeight),
+                              'Removal started. Your keys are still asked for 48 hours.',
+                            ),
+                          )
                         }
-                        style={styles.inlineLink}
+                        style={[styles.inlineLink, styles.lostLink]}
                       >
-                        <Text style={styles.inlineLinkText}>
-                          Cancel with a key
+                        <Text style={styles.lostLinkText}>
+                          Lost your keys? Remove them after 48 hours
                         </Text>
                       </Pressable>
-                    </View>
-                  )}
-
-                  {keyCount > 0 && (
-                    <View style={styles.card}>
-                      {keysState.keys.map((k, i) => (
-                        <View
-                          key={k.id}
-                          style={[
-                            styles.line,
-                            i < keyCount - 1 && styles.divider,
-                          ]}
-                        >
-                          <View style={styles.lineText}>
-                            <Text style={styles.lineLabel}>
-                              {k.role === 'backup'
-                                ? 'Backup key'
-                                : 'Security key'}
-                            </Text>
-                            <Text style={styles.lineHint}>
-                              Added {usDate(k.added)}
-                            </Text>
-                          </View>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Remove ${
-                              k.role === 'backup'
-                                ? 'backup key'
-                                : 'security key'
-                            }`}
-                            hitSlop={10}
-                            disabled={keyBusy}
-                            onPress={() =>
-                              keyAction(
-                                () => removeSecurityKey(k.id),
-                                'Key removed ✓',
-                              )
-                            }
-                          >
-                            <Text style={styles.inlineLinkText}>Remove</Text>
-                          </Pressable>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-
-                  {keyCount === 1 && keysState.removal == null && (
-                    <Text style={styles.info}>
-                      Add a backup key and keep it in another place. Without
-                      one, a lost key means a 48-hour wait or restoring from
-                      your 24 words.
-                    </Text>
-                  )}
-
-                  {keyMessage != null && (
-                    <Text
-                      style={keyMessage.error ? styles.warning : styles.info}
-                    >
-                      {keyMessage.text}
-                    </Text>
-                  )}
-
-                  {keysState.removal == null && (
-                    <View style={styles.reveal}>
-                      <Button
-                        label={
-                          keyCount === 0
-                            ? 'Add a security key'
-                            : keyCount === 1
-                            ? 'Add a backup key'
-                            : 'Add another key'
-                        }
-                        variant={keyCount < 2 ? 'primary' : 'quiet'}
-                        busy={keyBusy}
-                        onPress={() =>
-                          keyCount === 0
-                            ? whenOwner(() =>
-                                keyAction(
-                                  () => addSecurityKey('main'),
-                                  'Key added ✓',
-                                ),
-                              )
-                            : keyAction(
-                                () => addSecurityKey('backup'),
-                                'Backup key added ✓',
-                              )
-                        }
-                      />
-                      {keyCount > 0 && (
-                        <Text style={[styles.lineHint, styles.centered]}>
-                          First tap one of your keys, then the new one.
-                        </Text>
-                      )}
-                    </View>
-                  )}
-
-                  {keyCount > 0 && (
-                    <Button
-                      label="Test key"
-                      variant="quiet"
-                      disabled={keyBusy}
-                      onPress={() =>
-                        keyAction(checkSecurityKey, 'Your key works ✓')
-                      }
-                    />
-                  )}
-
-                  {keyCount > 0 && !phraseWarn && (
-                    <>
-                      <Text style={styles.section}>Recovery phrase</Text>
-                      <View style={styles.card}>
-                        <View style={styles.line}>
-                          <View style={styles.lineText}>
-                            <Text style={styles.lineLabel}>
-                              Also ask the key to show the recovery phrase
-                            </Text>
-                            <Text style={styles.lineHint}>
-                              {keysState.phraseNeedsKey
-                                ? 'On: the words also need a key.'
-                                : keyCount < PHRASE_KEY_MIN_KEYS
-                                ? 'Needs a backup key first.'
-                                : 'Off: Face ID or your code is enough.'}
-                            </Text>
-                          </View>
-                          <Switch
-                            accessibilityLabel="Also ask the key to show the recovery phrase"
-                            value={keysState.phraseNeedsKey}
-                            disabled={
-                              keyBusy ||
-                              (!keysState.phraseNeedsKey &&
-                                keyCount < PHRASE_KEY_MIN_KEYS)
-                            }
-                            onValueChange={next =>
-                              next
-                                ? setPhraseWarn(true)
-                                : keyAction(
-                                    () => setPhraseNeedsKey(false),
-                                    'The recovery phrase no longer asks a key.',
-                                  )
-                            }
-                            trackColor={{
-                              true: colors.gold,
-                              false: colors.line,
-                            }}
-                            ios_backgroundColor={colors.line}
-                          />
-                        </View>
-                      </View>
-                    </>
-                  )}
-
-                  {phraseWarn && (
-                    <View
-                      style={[styles.card, styles.dangerCard, styles.cardPad]}
-                    >
-                      <Text style={styles.lineLabel}>
-                        Keep your 24 words on paper
-                      </Text>
-                      <Text style={styles.lineHint}>
-                        If you lose all your keys and the paper, your Zcash can
-                        no longer be recovered. The 48-hour removal still works
-                        while you have this iPhone.
-                      </Text>
-                      <View style={styles.reveal}>
-                        <Button
-                          label="Turn on"
-                          onPress={() => {
-                            setPhraseWarn(false);
-                            keyAction(
-                              () => setPhraseNeedsKey(true),
-                              'The recovery phrase now also asks a key ✓',
-                            );
-                          }}
-                        />
-                        <Button
-                          label="Cancel"
-                          variant="back"
-                          onPress={() => setPhraseWarn(false)}
-                        />
-                      </View>
-                    </View>
-                  )}
-
-                  {keyCount > 0 && keysState.removal == null && (
-                    <Pressable
-                      accessibilityRole="button"
-                      hitSlop={10}
-                      disabled={keyBusy}
-                      onPress={() =>
-                        whenOwner(() =>
-                          keyAction(
-                            () => startKeyRemoval(networkHeight),
-                            'Removal started. Your keys are still asked for 48 hours.',
-                          ),
-                        )
-                      }
-                      style={[styles.inlineLink, styles.lostLink]}
-                    >
-                      <Text style={styles.lostLinkText}>
-                        Lost your keys? Remove them after 48 hours
-                      </Text>
-                    </Pressable>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {flow != null && (
-            <View style={styles.pad}>
-              <PinPad
-                title={padTitle}
-                message={pinMessage}
-                onComplete={onPin}
-              />
-            </View>
-          )}
-
-          {page === 'erase' && flow == null && (
-            <>
-              <View style={[styles.card, styles.dangerCard, styles.cardPad]}>
-                <Text style={[styles.warning, styles.noTop]}>
-                  This removes everything Zecky keeps on this phone: the
-                  recovery phrase, the Zecky code, your contacts, the payment
-                  history and every setting, including your servers.
-                </Text>
-              </View>
-              <Text style={styles.info}>
-                Your funds are not destroyed. They stay on the Zcash blockchain
-                and can be restored on any phone with the 24 words. Without the
-                24 words they are lost for good, so check that you have them on
-                paper before you continue.
-              </Text>
-              {phraseError != null && (
-                <Text style={styles.warning}>{phraseError}</Text>
-              )}
-              <View style={styles.reveal}>
-                {eraseArmed ? (
-                  <Button
-                    label="Erase everything now"
-                    variant="danger"
-                    busy={erasing}
-                    onPress={erase}
-                  />
-                ) : (
-                  <Button
-                    label="Erase wallet from this phone"
-                    variant="danger"
-                    onPress={() =>
-                      pinEnabled
-                        ? setFlow({ kind: 'erase' })
-                        : armEraseWithDeviceCheck()
-                    }
-                  />
+                    )}
+                  </>
                 )}
+              </>
+            )}
+
+            {flow != null && (
+              <View style={styles.pad}>
+                <PinPad
+                  title={padTitle}
+                  message={pinMessage}
+                  onComplete={onPin}
+                />
               </View>
-            </>
-          )}
+            )}
 
-          {page === 'viewkey' && flow == null && (
-            <>
-              <Text style={styles.info}>
-                A viewing key gives read-only access to this wallet. Whoever has
-                it can see your balance and every payment in and out, past and
-                future, but cannot spend anything.
-              </Text>
-              <Text style={styles.warning}>
-                It cannot be taken back once shared. Give it only to someone or
-                something that should see everything, such as your own
-                watch-only device or an accountant.
-              </Text>
-              {phraseError != null && (
-                <Text style={styles.warning}>{phraseError}</Text>
-              )}
-              {viewKey == null ? (
-                <View style={styles.reveal}>
-                  <Button
-                    label="Show viewing key"
-                    onPress={
-                      pinEnabled
-                        ? () => setFlow({ kind: 'revealKey' })
-                        : revealKeyWithDeviceCheck
-                    }
-                  />
+            {page === 'erase' && flow == null && (
+              <>
+                <View style={[styles.card, styles.dangerCard, styles.cardPad]}>
+                  <Text style={[styles.warning, styles.noTop]}>
+                    This removes everything Zecky keeps on this phone: the
+                    recovery phrase, the Zecky code, your contacts, the payment
+                    history and every setting, including your servers.
+                  </Text>
                 </View>
-              ) : (
+                <Text style={styles.info}>
+                  Your funds are not destroyed. They stay on the Zcash
+                  blockchain and can be restored on any phone with the 24 words.
+                  Without the 24 words they are lost for good, so check that you
+                  have them on paper before you continue.
+                </Text>
+                {phraseError != null && (
+                  <Text style={styles.warning}>{phraseError}</Text>
+                )}
                 <View style={styles.reveal}>
-                  <View style={styles.card}>
-                    <Text style={styles.keyText} selectable>
-                      {viewKey}
-                    </Text>
-                  </View>
-                  <View style={styles.gap} />
-                  <View style={styles.gap} />
-                  <Button
-                    label="Share or copy viewing key"
-                    variant="quiet"
-                    onPress={() => Share.share({ message: viewKey })}
-                  />
-                </View>
-              )}
-            </>
-          )}
-
-          {page === 'phrase' && flow == null && (
-            <>
-              <Text style={styles.warning}>
-                Anyone who sees these 24 words can take all your funds. Make
-                sure nobody is watching and never type them into a website or
-                share them in a message. Zecky will never ask for them.
-              </Text>
-              {phraseError != null && (
-                <Text style={styles.warning}>{phraseError}</Text>
-              )}
-              {phrase == null ? (
-                <View style={styles.reveal}>
-                  <Button
-                    label="Show recovery phrase"
-                    onPress={
-                      pinEnabled
-                        ? () => setFlow({ kind: 'reveal' })
-                        : revealWithDeviceCheck
-                    }
-                  />
-                </View>
-              ) : (
-                <View style={styles.reveal}>
-                  {confirmedNow ? (
-                    <PhraseConfirmed
-                      onDone={() => {
-                        setConfirmedNow(false);
-                        setPhrase(null);
-                        setPage('security');
-                      }}
-                    />
-                  ) : checking ? (
-                    <PhraseCheck
-                      mnemonic={phrase}
-                      onPassed={() => {
-                        setPhraseUnconfirmed(false);
-                        setChecking(false);
-                        setConfirmedNow(true);
-                      }}
-                      onShowPhrase={() => setChecking(false)}
+                  {eraseArmed ? (
+                    <Button
+                      label="Erase everything now"
+                      variant="danger"
+                      busy={erasing}
+                      onPress={erase}
                     />
                   ) : (
-                    <>
-                      {noPasscode && (
-                        <Text style={styles.warning}>
-                          This iPhone has no passcode, so your recovery phrase
-                          is not protected. Anyone holding this phone can see
-                          these words.
-                        </Text>
-                      )}
-                      <BirthdayNote height={birthdayHeight} />
-                      <PhraseGrid mnemonic={phrase} />
-                      {phraseUnconfirmed && (
-                        <View style={styles.reveal}>
-                          <Text style={styles.warning}>
-                            You have not confirmed these words yet. Compare them
-                            with your paper, then confirm.
-                          </Text>
-                          <Button
-                            label="Confirm my paper copy"
-                            onPress={() => setChecking(true)}
-                          />
-                        </View>
-                      )}
-                    </>
+                    <Button
+                      label="Erase wallet from this phone"
+                      variant="danger"
+                      onPress={() =>
+                        pinEnabled
+                          ? setFlow({ kind: 'erase' })
+                          : armEraseWithDeviceCheck()
+                      }
+                    />
                   )}
                 </View>
-              )}
-            </>
+              </>
+            )}
+
+            {page === 'viewkey' && flow == null && (
+              <>
+                <Text style={styles.info}>
+                  A viewing key gives read-only access to this wallet. Whoever
+                  has it can see your balance and every payment in and out, past
+                  and future, but cannot spend anything.
+                </Text>
+                <Text style={styles.warning}>
+                  It cannot be taken back once shared. Give it only to someone
+                  or something that should see everything, such as your own
+                  watch-only device or an accountant.
+                </Text>
+                {phraseError != null && (
+                  <Text style={styles.warning}>{phraseError}</Text>
+                )}
+                {viewKey == null ? (
+                  <View style={styles.reveal}>
+                    <Button
+                      label="Show viewing key"
+                      onPress={
+                        pinEnabled
+                          ? () => setFlow({ kind: 'revealKey' })
+                          : revealKeyWithDeviceCheck
+                      }
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.reveal}>
+                    <View style={styles.card}>
+                      <Text style={styles.keyText} selectable>
+                        {viewKey}
+                      </Text>
+                    </View>
+                    <View style={styles.gap} />
+                    <View style={styles.gap} />
+                    <Button
+                      label="Share or copy viewing key"
+                      variant="quiet"
+                      onPress={() => Share.share({ message: viewKey })}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+
+            {page === 'phrase' && flow == null && (
+              <>
+                <Text style={styles.warning}>
+                  Anyone who sees these 24 words can take all your funds. Make
+                  sure nobody is watching and never type them into a website or
+                  share them in a message. Zecky will never ask for them.
+                </Text>
+                {phraseError != null && (
+                  <Text style={styles.warning}>{phraseError}</Text>
+                )}
+                {phrase == null ? (
+                  <View style={styles.reveal}>
+                    <Button
+                      label="Show recovery phrase"
+                      onPress={
+                        pinEnabled
+                          ? () => setFlow({ kind: 'reveal' })
+                          : revealWithDeviceCheck
+                      }
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.reveal}>
+                    {confirmedNow ? (
+                      <PhraseConfirmed
+                        onDone={() => {
+                          setConfirmedNow(false);
+                          setPhrase(null);
+                          setPage('security');
+                        }}
+                      />
+                    ) : checking ? (
+                      <PhraseCheck
+                        mnemonic={phrase}
+                        onPassed={() => {
+                          setPhraseUnconfirmed(false);
+                          setChecking(false);
+                          setConfirmedNow(true);
+                        }}
+                        onShowPhrase={() => setChecking(false)}
+                      />
+                    ) : (
+                      <>
+                        {noPasscode && (
+                          <Text style={styles.warning}>
+                            This iPhone has no passcode, so your recovery phrase
+                            is not protected. Anyone holding this phone can see
+                            these words.
+                          </Text>
+                        )}
+                        <BirthdayNote height={birthdayHeight} />
+                        <PhraseGrid mnemonic={phrase} />
+                        {phraseUnconfirmed && (
+                          <View style={styles.reveal}>
+                            <Text style={styles.warning}>
+                              You have not confirmed these words yet. Compare
+                              them with your paper, then confirm.
+                            </Text>
+                            <Button
+                              label="Confirm my paper copy"
+                              onPress={() => setChecking(true)}
+                            />
+                          </View>
+                        )}
+                      </>
+                    )}
+                  </View>
+                )}
+              </>
+            )}
+          </ScrollView>
+          {page === 'menu' ? (
+            <Button label="Done" variant="back" onPress={onClose} />
+          ) : (
+            <Button
+              label="Back"
+              variant="back"
+              onPress={() => {
+                if (flow != null) {
+                  pendingChange.current = null;
+                  setFlow(null);
+                } else if (
+                  page === 'phrase' ||
+                  page === 'viewkey' ||
+                  page === 'erase' ||
+                  page === 'keys'
+                ) {
+                  setPage('security');
+                } else if (page === 'openwait' || page === 'seckey') {
+                  setPage('keys');
+                } else setPage('menu');
+              }}
+            />
           )}
-        </ScrollView>
-        {page === 'menu' ? (
-          <Button label="Done" variant="back" onPress={onClose} />
-        ) : (
-          <Button
-            label="Back"
-            variant="back"
-            onPress={() => {
-              if (flow != null) {
-                pendingChange.current = null;
-                setFlow(null);
-              } else if (
-                page === 'phrase' ||
-                page === 'viewkey' ||
-                page === 'erase' ||
-                page === 'keys'
-              ) {
-                setPage('security');
-              } else if (page === 'openwait' || page === 'seckey') {
-                setPage('keys');
-              } else setPage('menu');
-            }}
-          />
-        )}
+        </View>
       </View>
     </Modal>
   );
@@ -1473,11 +1532,13 @@ export function SettingsScreen({
 const useStyles = makeStyles(colors => ({
   // Sheets reach under the home indicator: the bottom buttons sit higher,
   // clear of the swipe area and easy to reach with a thumb.
+  safe: { flex: 1, backgroundColor: colors.ink },
   container: {
     flex: 1,
     backgroundColor: colors.ink,
-    padding: space.lg,
-    paddingBottom: space.xl + space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.md,
     overflow: 'hidden',
   },
   scroll: { paddingBottom: space.lg, paddingTop: space.sm },
@@ -1490,13 +1551,51 @@ const useStyles = makeStyles(colors => ({
     marginTop: space.lg,
     marginBottom: -space.xs,
   },
+  // An engraved brass plate, as on Lock more and Release.
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.gold + '38',
     paddingHorizontal: space.md,
     marginTop: space.md,
+    shadowColor: colors.gold,
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  chain: { alignItems: 'center', paddingVertical: space.md, marginTop: 0 },
+  chainLabel: {
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 10,
+    letterSpacing: 3,
+    color: colors.gold,
+  },
+  chainBlock: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 26,
+    color: colors.text,
+    marginTop: 4,
+    fontVariant: ['tabular-nums'],
+  },
+  chainSub: {
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  quiet: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: space.sm,
+    textAlign: 'center',
+  },
+  disclosure: { alignSelf: 'center', marginTop: space.lg, padding: 4 },
+  disclosureText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.gold,
   },
   cardPad: { paddingVertical: space.md },
   dangerCard: {

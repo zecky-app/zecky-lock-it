@@ -143,7 +143,7 @@ function parse(text: string): KeysState {
 }
 
 const UNREADABLE =
-  'Zecky could not read your security keys. Nothing was shown or released. Close Zecky and open it again; if it stays like this, restore from your 24 words.';
+  'Zecky could not read your security keys. Nothing was shown or sent. Close Zecky and open it again; if it stays like this, restore from your 24 words.';
 
 /** Call once at startup. */
 export async function loadSecurityKeyState(): Promise<KeysState> {

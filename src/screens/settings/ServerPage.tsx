@@ -42,12 +42,11 @@ async function checkServer(server: Server): Promise<void> {
 const TOR_STATUS: Record<TorStatus, string> = {
   off: 'Off. The server sees your internet address.',
   starting: 'Connecting to Tor…',
-  on: 'On. Releases and looking up your payments go through Tor.',
+  on: 'On. Your internet address stays hidden.',
   failed:
     'Tor could not connect on this network. The wallet is using a direct connection.',
   unavailable: 'Tor is not available in this build of Zecky.',
-  ownNode:
-    'Not needed with your own node: Rock it is yours, so there is nobody to hide your address from. Zecky talks to it directly; the price still goes through Tor.',
+  ownNode: 'Not needed with your own node. The price still goes through Tor.',
 };
 
 export function ServerPage({ tor }: { tor: TorStatus }) {
@@ -89,6 +88,8 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
     }
   };
   const [message, setMessage] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [explained, setExplained] = useState(false);
 
   /** Checks a server and switches to it. A name saves it under that name. */
   const choose = async (server: Server, saveAs?: string) => {
@@ -135,13 +136,7 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
 
   return (
     <>
-      <Text style={styles.info}>
-        Zecky reads the Zcash blockchain through a server. The server can see
-        your internet address and that a wallet is syncing, but not your balance
-        or addresses. Running your own gives the most privacy.
-      </Text>
-
-      <View style={styles.card}>
+      <View style={[styles.card, styles.first]}>
         <View style={styles.row}>
           <View style={styles.rowText}>
             <Text style={styles.rowTitle}>Use Tor</Text>
@@ -157,21 +152,8 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
           />
         </View>
       </View>
-      <Text style={styles.remark}>Tor might slow down the connection.</Text>
-      {torWanted && tor !== 'ownNode' && (
-        <Text style={styles.remark}>
-          With Tor, a release sometimes needs a second try. Zecky tries again at
-          once, and otherwise every few minutes by itself.
-        </Text>
-      )}
-      <Text style={styles.info}>
-        Tor hides your internet address when Zecky releases Zcash, looks up your
-        own payments, checks the chain height or fetches the price. Downloading
-        blocks stays direct, so the server can still tell that a Zcash wallet is
-        syncing. Some networks block Tor.
-      </Text>
-
-      <View style={styles.card}>
+      <Text style={styles.label}>Server</Text>
+      <View style={[styles.card, styles.noTop]}>
         {SERVER_PRESETS.map(preset => {
           const on = sameServer(preset.server, current);
           const busy = checking === serverLabel(preset.server);
@@ -208,7 +190,7 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
               exists in your own Tailscale network.
             </Text>
           )}
-          <View style={styles.card}>
+          <View style={[styles.card, styles.noTop]}>
             {savedServers.map(saved => {
               const on = sameServer(saved, current);
               const busy = checking === serverLabel(saved);
@@ -273,80 +255,124 @@ export function ServerPage({ tor }: { tor: TorStatus }) {
         </>
       )}
 
-      <Text style={styles.label}>Add a server</Text>
-      <TextInput
-        style={styles.input}
-        value={name}
-        onChangeText={setName}
-        maxLength={MAX_SERVER_NAME}
-        autoCorrect={false}
-        placeholder="Name, for example Rock it at home"
-        placeholderTextColor={colors.goldDim}
-        selectionColor={colors.gold}
-      />
-      <View style={styles.gap} />
-      <TextInput
-        style={styles.input}
-        value={custom}
-        onChangeText={setCustom}
-        autoCapitalize="none"
-        autoCorrect={false}
-        spellCheck={false}
-        keyboardType="url"
-        placeholder="host or host:port"
-        placeholderTextColor={colors.goldDim}
-        selectionColor={colors.gold}
-      />
-      {scanning ? (
-        <>
-          <View style={styles.cameraFrame}>
-            <Camera
-              style={styles.camera}
-              scanBarcode
-              showFrame={false}
-              onReadCode={event => onScanned(event.nativeEvent.codeStringValue)}
-            />
-          </View>
-          <View style={styles.gap} />
-          <Button
-            label="Cancel scan"
-            variant="back"
-            onPress={() => setScanning(false)}
-          />
-        </>
-      ) : (
-        <>
-          <View style={styles.gap} />
-          <Button
-            label="Scan QR code"
-            variant="quiet"
-            onPress={() => {
-              setMessage(null);
-              setScanning(true);
-            }}
-          />
-        </>
-      )}
-      <Text style={styles.info}>
-        Your own node: scan the Wallet server code on its Rock it page, or type
-        its address. Save the home and Tailscale addresses under their own name.
-      </Text>
-      {torWanted && (
-        <Text style={styles.info}>
-          Checking a server connects to it directly, also with Tor on: it sees
-          your internet address once, never anything about your wallet.
+      {message != null && <Text style={styles.message}>{message}</Text>}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: adding }}
+        hitSlop={8}
+        onPress={() => setAdding(a => !a)}
+        style={styles.disclosure}
+      >
+        <Text style={styles.disclosureText}>
+          {adding ? 'Close' : '+ Add a server or your own node'}
         </Text>
+      </Pressable>
+      {adding && (
+        <>
+          <TextInput
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+            maxLength={MAX_SERVER_NAME}
+            autoCorrect={false}
+            placeholder="Name, for example Rock it at home"
+            placeholderTextColor={colors.goldDim}
+            selectionColor={colors.gold}
+          />
+          <View style={styles.gap} />
+          <TextInput
+            style={styles.input}
+            value={custom}
+            onChangeText={setCustom}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            keyboardType="url"
+            placeholder="host or host:port"
+            placeholderTextColor={colors.goldDim}
+            selectionColor={colors.gold}
+          />
+          {scanning ? (
+            <>
+              <View style={styles.cameraFrame}>
+                <Camera
+                  style={styles.camera}
+                  scanBarcode
+                  showFrame={false}
+                  onReadCode={event =>
+                    onScanned(event.nativeEvent.codeStringValue)
+                  }
+                />
+              </View>
+              <View style={styles.gap} />
+              <Button
+                label="Cancel scan"
+                variant="back"
+                onPress={() => setScanning(false)}
+              />
+            </>
+          ) : (
+            <>
+              <View style={styles.gap} />
+              <Button
+                label="Scan QR code"
+                variant="quiet"
+                onPress={() => {
+                  setMessage(null);
+                  setScanning(true);
+                }}
+              />
+            </>
+          )}
+          <Text style={styles.quiet}>
+            Your own node: scan the Wallet server code on its Rock it page.
+          </Text>
+          <View style={styles.gap} />
+          <Button
+            label="Check, save and use"
+            disabled={parsed == null}
+            busy={
+              checking != null &&
+              parsed != null &&
+              checking === serverLabel(parsed)
+            }
+            onPress={() => parsed != null && choose(parsed, name)}
+          />
+        </>
       )}
-      <View style={styles.gap} />
-      <Button
-        label="Check, save and use"
-        disabled={parsed == null}
-        busy={
-          checking != null && parsed != null && checking === serverLabel(parsed)
-        }
-        onPress={() => parsed != null && choose(parsed, name)}
-      />
-      {message != null && <Text style={styles.info}>{message}</Text>}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: explained }}
+        hitSlop={8}
+        onPress={() => setExplained(e => !e)}
+        style={styles.disclosure}
+      >
+        <Text style={styles.disclosureText}>
+          How the server and Tor work {explained ? '‹' : '›'}
+        </Text>
+      </Pressable>
+      {explained && (
+        <View style={styles.explain}>
+          <Text style={styles.info}>
+            Zecky reads the Zcash blockchain through a server. The server can
+            see your internet address and that a wallet is syncing, but not your
+            balance or addresses. Running your own gives the most privacy.
+          </Text>
+          <Text style={styles.info}>
+            Tor hides your internet address when Zecky sends Zcash, looks up
+            your own payments, checks the chain height or fetches the price.
+            Downloading blocks stays direct. Tor can be slower, some networks
+            block it, and a payment sometimes needs a second try: Zecky tries
+            again by itself.
+          </Text>
+          <Text style={styles.info}>
+            Checking a new server connects to it directly, also with Tor on: it
+            sees your internet address once, never anything about your wallet.
+          </Text>
+        </View>
+      )}
     </>
   );
 }
@@ -373,14 +399,42 @@ const useStyles = makeStyles(colors => ({
     color: colors.gold,
     marginTop: space.md,
   },
+  // An engraved brass plate, as on Lock more and Release.
   card: {
     backgroundColor: colors.inkRaised,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.gold + '38',
     paddingHorizontal: space.md,
     marginTop: space.md,
+    shadowColor: colors.gold,
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
+  first: { marginTop: 0 },
+  noTop: { marginTop: 0 },
+  message: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.gold,
+    marginTop: space.md,
+  },
+  quiet: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
+    marginTop: space.sm,
+  },
+  disclosure: { alignSelf: 'center', marginTop: space.lg, padding: 4 },
+  disclosureText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.gold,
+  },
+  explain: { marginTop: -space.xs },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
   pressed: { opacity: 0.5 },
   rowText: { flex: 1, paddingRight: space.md },

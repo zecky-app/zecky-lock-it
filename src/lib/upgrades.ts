@@ -1,14 +1,14 @@
 // Zcash network upgrades that change what Zecky has to know.
 //
 // NU7 (Nov 2026, block 3,543,405): blocks every 25 seconds instead of 75,
-// and transactions must carry NU7's stamp (consensus branch ID). The Zcash
-// engine in this build does not know NU7 yet, so from just before its
-// activation Zecky builds no transactions at all: anything it built would
-// be rejected by the network. Receiving, syncing and balances keep working.
-// Set ENGINE_KNOWS_NU7 to true once the engine is updated.
+// and transactions must carry NU7's stamp (consensus branch ID). The Zecky
+// engine (zecky-app/zecky-engine v4.0.0-zecky.2, installed by
+// scripts/fetch-engine.sh) is built on the NU7 releases of the official
+// Zcash core, so it builds NU7 transactions. The pause below only applies
+// when ENGINE_KNOWS_NU7 is false, for an engine that does not know NU7.
 
 export const NU7_HEIGHT = 3_543_405;
-export const ENGINE_KNOWS_NU7 = false;
+export const ENGINE_KNOWS_NU7 = true;
 
 /**
  * Stop building transactions this many blocks before NU7: a transaction

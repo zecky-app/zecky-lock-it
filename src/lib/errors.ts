@@ -20,6 +20,18 @@ const RULES: [RegExp, string][] = [
     'This device still holds data from an earlier wallet. Delete the Zecky app, install it again, and your wallet will open cleanly.',
   ],
   [
+    // Engine (ZIP 316 revision 2): the recipient's address has an expiry
+    // date that has passed.
+    /recipient address has expired/i,
+    'This address has expired. Ask the recipient for a new address. Nothing was sent.',
+  ],
+  [
+    // Engine: a unified address that only accepts a kind of payment Zecky
+    // cannot make yet.
+    /exposes no receiver this wallet can pay/i,
+    'Zecky cannot pay this address yet: it only accepts a kind of payment Zecky does not support. Ask the recipient for another address. Nothing was sent.',
+  ],
+  [
     /not synced|still starting/i,
     'The wallet is still syncing. Try again once it is up to date.',
   ],
@@ -61,16 +73,16 @@ export function describeError(e: unknown): string {
 }
 
 export const SERVER_CHANGED_SEND =
-  'The server changed while you were tapping your key. Nothing was released. Try again.';
+  'The server changed while you were tapping your key. Nothing was sent. Try again.';
 export const NU7_PAUSED =
-  'Releasing is paused for the Zcash network upgrade (NU7) until Zecky is updated. Your Zcash is safe, and you can still receive.';
+  'Sending is paused for the Zcash network upgrade (NU7) until Zecky is updated. Your Zcash is safe, and you can still receive.';
 export const TOR_NOT_READY =
-  'Tor is not connected yet, so nothing was released. Wait until Tor is on, or switch Tor off under Settings › Network.';
-export const OFFLINE_SEND = 'No internet connection. Nothing was released.';
+  'Tor is not connected yet, so nothing was sent. Wait until Tor is on, or switch Tor off under Settings › Network.';
+export const OFFLINE_SEND = 'No internet connection. Nothing was sent.';
 export const SEND_PENDING =
-  'It could not be delivered to the Zcash network yet. Zecky keeps trying by itself every few minutes. Do not release it again.';
+  'It could not be delivered to the Zcash network yet. Zecky keeps trying by itself every few minutes. Do not send it again.';
 export const SEND_REJECTED =
-  'The network has not accepted this release yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves the lock. Do not release it again.';
+  'The network has not accepted this payment yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves the lock. Do not send it again.';
 
 /** An error for a payment that was created and will still go out by itself. */
 export function paymentSavedError(
@@ -94,4 +106,4 @@ export function isPaymentSaved(e: unknown): boolean {
 }
 
 export const HOME_NODE_SEND =
-  'Rock it cannot be reached on this connection. Use your home Wi-Fi or turn on Tailscale, or pick another server under Network. Nothing was released.';
+  'Rock it cannot be reached on this connection. Use your home Wi-Fi or turn on Tailscale, or pick another server under Network. Nothing was sent.';

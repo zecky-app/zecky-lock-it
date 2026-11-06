@@ -267,6 +267,11 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
         startedBefore = true;
         if (cancelled) return;
         live.current = synchronizer;
+        // The engine fills in some transactions during the first sync after
+        // a launch (after a database update by a new engine, for example)
+        // without reporting them as found. Ask for the full list once that
+        // sync is done, so the history is complete without a restart.
+        let resentAfterSync = false;
         synchronizer.subscribe({
           onBalanceChanged: balance => {
             if (cancelled) return;
@@ -309,13 +314,23 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
                 : { ...prev, ...next, pools },
             );
           },
-          onStatusChanged: status =>
+          onStatusChanged: status => {
             // Reaching the network again clears an earlier connection error.
             patch(
               status.name === 'SYNCED' || status.name === 'SYNCING'
                 ? { status: status.name, error: null }
                 : { status: status.name },
-            ),
+            );
+            if (status.name === 'SYNCED' && !resentAfterSync && !cancelled) {
+              resentAfterSync = true;
+              const native = NativeModules.RNZcash;
+              if (typeof native?.emitExistingTransactions === 'function') {
+                native.emitExistingTransactions(WALLET_ALIAS).catch(() => {
+                  resentAfterSync = false;
+                });
+              }
+            }
+          },
           onTransactionsChanged: event => {
             if (cancelled) return;
             pruneSent(event.transactions);

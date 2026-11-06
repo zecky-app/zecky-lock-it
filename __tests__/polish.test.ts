@@ -41,6 +41,16 @@ test('errors become plain sentences', () => {
     /still syncing/,
   );
   expect(friendlyError('grpc status unavailable')).toMatch(/Cannot reach/);
+  expect(
+    friendlyError(
+      'Failed to spend: create_proposed_transactions: the recipient address has expired; ask the recipient for a current address',
+    ),
+  ).toMatch(/This address has expired/);
+  expect(
+    friendlyError(
+      'propose_transfer: the recipient address exposes no receiver this wallet can pay',
+    ),
+  ).toMatch(/Zecky cannot pay this address/);
   expect(friendlyError('Something odd')).toBe('Something odd');
 });
 

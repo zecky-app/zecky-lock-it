@@ -5,8 +5,12 @@ Part of Zecky: Lock it, Pocket and [Rock it](https://github.com/zecky-app/rock-i
 
 The keys stay on the phone. Zecky runs no servers of its own and collects no accounts or analytics.
 
-React Native 0.87, light client via `react-native-zcash` (the Electric Coin
-Company SDKs).
+React Native 0.87, light client via `react-native-zcash`. The Zcash engine
+(`libzcashlc`: keys, proofs and transactions, all from the official Zcash core,
+librustzcash, with NU7) comes from
+[zecky-engine](https://github.com/zecky-app/zecky-engine); `npm install` fetches
+it and refuses it unless its SHA-256 checksums match (`scripts/fetch-engine.sh`,
+`docs/ENGINE.md`).
 
 ## First run (Mac, iOS simulator)
 
@@ -32,7 +36,8 @@ Company SDKs).
   stored on the phone must re-read that page and update it in the same
   change. Cosmetic changes do not need to touch it.
 - The Zcash library is patched (`patches/`). After changing the patch, run
-  `rm -rf node_modules/react-native-zcash && npm install`.
+  `rm -rf node_modules/react-native-zcash && npm install`. Regenerate the patch
+  without the engine files (see `docs/ENGINE.md`).
 - Do not accept Xcode's "recommended settings": User Script Sandboxing must
   stay off or the build fails.
 
@@ -44,5 +49,5 @@ See `docs/THREAT_MODEL.md` for what the wallet protects against.
 ## License
 
 MIT, see `LICENSE`. The fonts in `assets/fonts` (Inter, Newsreader) are under
-the SIL Open Font License. The Zcash light-client SDKs are by the Electric
-Coin Company.
+the SIL Open Font License. The Zcash light-client SDK and librustzcash are by
+the Zcash developers (MIT / Apache-2.0).

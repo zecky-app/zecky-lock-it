@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Pressable,
   Modal,
@@ -9,17 +10,20 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera } from 'react-native-camera-kit';
 import { Tools } from 'react-native-zcash';
 import Svg, { Line } from 'react-native-svg';
 import { Button } from '../components/Button';
 import {
   BrassButton,
+  RoomHeader,
   SheetCorner,
   SheetHeader,
+  usePlateStyle,
   ZeckyLock,
-  useCardStyle,
 } from '../components/lock';
 import { Confirming } from '../components/Confirming';
 import { Icon } from '../components/Icon';
@@ -91,7 +95,9 @@ export function SendScreen({
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
-  const card = useCardStyle();
+  const insets = useSafeAreaInsets();
+  const plate = usePlateStyle();
+  const { height } = useWindowDimensions();
   const [step, setStep] = useState<Step>({ name: 'form' });
   const [address, setAddress] = useState('');
   const [amount, setAmount] = useState('');
@@ -168,7 +174,7 @@ export function SendScreen({
     const scanned = isMultiRecipient(text) ? null : parseScanned(text);
     if (isMultiRecipient(text)) {
       setError(
-        'This payment request asks to pay several people at once. Zecky releases to one address at a time, so nothing was filled in.',
+        'This payment request asks to pay several people at once. Zecky sends to one address at a time, so nothing was filled in.',
       );
     } else if (scanned == null) {
       setError('That code is not a Zcash address.');
@@ -197,10 +203,29 @@ export function SendScreen({
     if (target !== unit) onToggleUnit();
   };
 
+  // The network fee on top of the amount (default), or taken out of it so
+  // the total that leaves the lock is exactly what was typed.
+  const [feeIncluded, setFeeIncluded] = useState(false);
+  // While the keypad is open the lock steps aside, so the address, the
+  // amount and the fee choice stay in view above Review.
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardWillShow', () =>
+      setKeyboardOpen(true),
+    );
+    const hide = Keyboard.addListener('keyboardWillHide', () =>
+      setKeyboardOpen(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   const review = async () => {
     const toAddress = address.trim();
     const typed = max ? null : parseTyped(amount);
-    if (toAddress === '') return setError('Enter the address to release to.');
+    if (toAddress === '') return setError('Enter the address to send to.');
     if (!max && typed == null) {
       return setError(
         fiat != null
@@ -234,13 +259,51 @@ export function SendScreen({
           toAddress,
           memo: memoOrNone,
         }));
-      } else {
+      } else if (!feeIncluded) {
         zatoshi = typed;
         proposal = await wallet.proposeTransfer({
           zatoshi,
           toAddress,
           memo: memoOrNone,
         });
+      } else {
+        // Fee included: ask the engine for the fee, then send the amount
+        // minus that fee. The fee can change with the amount (fewer notes
+        // needed), so repeat until amount plus fee fits what was typed.
+        const total = BigInt(typed);
+        let fee = BigInt(
+          (
+            await wallet.proposeTransfer({
+              zatoshi: typed,
+              toAddress,
+              memo: memoOrNone,
+            })
+          ).totalFee,
+        );
+        let found: {
+          zatoshi: string;
+          proposal: Awaited<ReturnType<Wallet['proposeTransfer']>>;
+        } | null = null;
+        for (let i = 0; i < 3 && found == null; i++) {
+          const net = total - fee;
+          if (net <= 0n) break;
+          const p = await wallet.proposeTransfer({
+            zatoshi: net.toString(),
+            toAddress,
+            memo: memoOrNone,
+          });
+          const next = BigInt(p.totalFee);
+          if (net + next <= total) {
+            found = { zatoshi: net.toString(), proposal: p };
+          } else fee = next;
+        }
+        if (found == null) {
+          setError(
+            'This amount is too small to cover the network fee. Enter a larger amount.',
+          );
+          return;
+        }
+        ({ zatoshi, proposal } = found);
       }
       setStep({
         name: 'review',
@@ -304,483 +367,529 @@ export function SendScreen({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
+      animationType="fade"
+      presentationStyle="fullScreen"
       onRequestClose={busy ? undefined : onClose}
     >
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      <View
+        style={[
+          styles.safe,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
       >
-        <SheetCorner />
-        {step.name === 'form' && (
-          <>
-            <ScrollView
-              contentContainerStyle={styles.scroll}
-              keyboardShouldPersistTaps="handled"
-            >
-              <SheetHeader
-                title="Release Zcash"
-                subtitle="Taken out of the lock. Everything else stays locked."
-              />
-              {waiting > 0 && (
-                <Text style={[styles.error, styles.noTop]}>
-                  {waiting === 1
-                    ? 'A release from this phone is still waiting to go out.'
-                    : `${waiting} releases from this phone are still waiting to go out.`}{' '}
-                  It goes out by itself once the network can be reached. Check
-                  Activity before releasing again.
-                </Text>
-              )}
-
-              <View style={[card, styles.formCard]}>
-                {/* To */}
-                <View style={styles.fieldHead}>
-                  <Text style={styles.fieldLabel}>TO</Text>
-                  <View style={styles.toActions}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Contacts"
-                      hitSlop={10}
-                      onPress={() => {
-                        setError(null);
-                        setNewName('');
-                        setStep({ name: 'contacts' });
-                      }}
-                      style={styles.iconButton}
-                    >
-                      <Icon name="person" size={18} />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Scan a QR code"
-                      hitSlop={10}
-                      onPress={() => {
-                        setError(null);
-                        setStep({ name: 'scan' });
-                      }}
-                      style={styles.iconButton}
-                    >
-                      <Icon name="scan" size={18} />
-                    </Pressable>
-                  </View>
-                </View>
-                <TextInput
-                  style={styles.toInput}
-                  value={address}
-                  onChangeText={setAddress}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  spellCheck={false}
-                  placeholder="Zcash address"
-                  placeholderTextColor={colors.goldDim}
-                  selectionColor={colors.gold}
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          {(step.name === 'contacts' || step.name === 'scan') && (
+            <SheetCorner />
+          )}
+          {step.name === 'form' && (
+            <>
+              <ScrollView
+                contentContainerStyle={styles.scroll}
+                keyboardShouldPersistTaps="handled"
+              >
+                <RoomHeader
+                  open
+                  compact={height < 800}
+                  bare={keyboardOpen}
+                  title="Send Zcash"
+                  subtitle={
+                    keyboardOpen
+                      ? undefined
+                      : 'Taken out of the lock. Everything else stays locked.'
+                  }
                 />
-                {contactName(contacts, address) != null && (
-                  <Text style={styles.contactLine}>
-                    ✓ {contactName(contacts, address)}
-                  </Text>
-                )}
-                {transparent && (
-                  <Text style={styles.warnLine}>
-                    Transparent address: the amount and both addresses will be
-                    public.
+                {waiting > 0 && (
+                  <Text style={[styles.error, styles.noTop]}>
+                    {waiting === 1
+                      ? 'A payment from this phone is still waiting to go out.'
+                      : `${waiting} payments from this phone are still waiting to go out.`}{' '}
+                    It goes out by itself once the network can be reached. Check
+                    Activity before sending again.
                   </Text>
                 )}
 
-                <View style={styles.rule} />
-
-                {/* Amount */}
-                <View style={styles.fieldHead}>
-                  <Text style={styles.fieldLabel}>AMOUNT</Text>
-                  <View style={styles.unitSwitch}>
-                    {(
-                      [
-                        'ZEC',
-                        'zats',
-                        ...(currency != null && price != null
-                          ? (['fiat'] as const)
-                          : []),
-                      ] as const
-                    ).map(option => {
-                      const on =
-                        option === 'fiat'
-                          ? fiat != null
-                          : fiat == null && option === unit;
-                      return (
-                        <Pressable
-                          key={option}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: on }}
-                          onPress={() => chooseInput(option)}
-                        >
-                          <Text
-                            style={[styles.unitOption, on && styles.unitOn]}
-                          >
-                            {option === 'fiat' ? currency : option}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+                <View style={[plate, styles.formCard]}>
+                  {/* To */}
+                  <View style={styles.fieldHead}>
+                    <Text style={styles.fieldLabel}>TO</Text>
+                    <View style={styles.toActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Contacts"
+                        hitSlop={10}
+                        onPress={() => {
+                          setError(null);
+                          setNewName('');
+                          setStep({ name: 'contacts' });
+                        }}
+                        style={styles.iconButton}
+                      >
+                        <Icon name="person" size={18} />
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Scan a QR code"
+                        hitSlop={10}
+                        onPress={() => {
+                          setError(null);
+                          setStep({ name: 'scan' });
+                        }}
+                        style={styles.iconButton}
+                      >
+                        <Icon name="scan" size={18} />
+                      </Pressable>
+                    </View>
                   </View>
-                </View>
-                <TextInput
-                  style={styles.amountInput}
-                  value={max ? maxText : amount}
-                  onChangeText={text => {
-                    setMax(false);
-                    setAmount(text);
-                  }}
-                  keyboardType={
-                    fiat != null || unit === 'ZEC'
-                      ? 'decimal-pad'
-                      : 'number-pad'
-                  }
-                  placeholder={
-                    fiat != null ? '0.00' : unit === 'ZEC' ? '0.000' : '0'
-                  }
-                  placeholderTextColor={colors.goldDim}
-                  selectionColor={colors.gold}
-                />
-                <View style={styles.amountFoot}>
-                  <Text style={styles.hint}>
-                    {max
-                      ? 'Everything; the fee comes out of it.'
-                      : fiat != null && parseTyped(amount) != null
-                      ? `≈ ${formatExact(parseTyped(amount) ?? '0', unit)}`
-                      : `${formatExact(wallet.spendableZatoshi, unit)}${approx(
-                          wallet.spendableZatoshi,
-                        )} available`}
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: max }}
-                    hitSlop={10}
-                    onPress={() => {
-                      setAmount('');
-                      setMax(!max);
-                    }}
-                    style={[styles.maxChip, max && styles.maxChipOn]}
-                  >
-                    <Text style={[styles.maxLabel, max && styles.maxLabelOn]}>
-                      Max
-                    </Text>
-                  </Pressable>
-                </View>
-                {confirming !== '0' && (
-                  <Confirming
-                    text={`${formatExact(confirming, unit)} ${waitingText(
-                      slowestWaiting(wallet.transactions, wallet.networkHeight),
-                    )}`}
+                  <TextInput
+                    style={styles.toInput}
+                    value={address}
+                    onChangeText={setAddress}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    placeholder="Zcash address"
+                    placeholderTextColor={colors.goldDim}
+                    selectionColor={colors.gold}
                   />
-                )}
+                  {contactName(contacts, address) != null && (
+                    <Text style={styles.contactLine}>
+                      ✓ {contactName(contacts, address)}
+                    </Text>
+                  )}
+                  {transparent && (
+                    <Text style={styles.warnLine}>
+                      Transparent address: the amount and both addresses will be
+                      public.
+                    </Text>
+                  )}
 
-                {!transparent && (noteOpen || memo !== '') && (
-                  <>
-                    <View style={styles.rule} />
-                    <Text style={styles.fieldLabel}>PRIVATE NOTE</Text>
-                    <TextInput
-                      style={styles.noteInput}
-                      value={memo}
-                      onChangeText={setMemo}
-                      multiline
-                      maxLength={500}
-                      autoFocus={memo === ''}
-                      placeholder="Only the receiver can read this"
-                      placeholderTextColor={colors.goldDim}
-                      selectionColor={colors.gold}
-                    />
-                  </>
-                )}
-              </View>
+                  <View style={styles.rule} />
 
-              {!transparent && !noteOpen && memo === '' && (
-                <Pressable
-                  accessibilityRole="button"
-                  hitSlop={10}
-                  onPress={() => setNoteOpen(true)}
-                  style={styles.addNote}
-                >
-                  <Text style={styles.addNoteText}>+ Add a private note</Text>
-                </Pressable>
-              )}
-
-              {nu7Paused && <Text style={styles.error}>{NU7_PAUSED}</Text>}
-              {torBlocked && !nu7Paused && (
-                <Text style={styles.error}>
-                  Tor is not connected yet. Releasing waits until it is, so your
-                  internet address stays hidden. Or switch Tor off under
-                  Settings › Network.
-                </Text>
-              )}
-              {error != null && <Text style={styles.error}>{error}</Text>}
-            </ScrollView>
-            <BrassButton
-              label="Review"
-              icon="arrowUp"
-              onPress={review}
-              busy={busy}
-              disabled={torBlocked}
-            />
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={10}
-              onPress={onClose}
-              style={styles.quietButton}
-            >
-              <Text style={styles.quietText}>Cancel</Text>
-            </Pressable>
-          </>
-        )}
-
-        {step.name === 'contacts' && (
-          <>
-            <ScrollView
-              contentContainerStyle={styles.scroll}
-              keyboardShouldPersistTaps="handled"
-            >
-              <SheetHeader title="Contacts" />
-              {contacts.length === 0 ? (
-                <Text style={styles.body}>
-                  No contacts yet. Type or scan an address on the send screen
-                  and save it here, or add contacts in Settings.
-                </Text>
-              ) : (
-                <View style={styles.card}>
-                  {contacts.map(contact => (
+                  {/* Amount */}
+                  <View style={styles.fieldHead}>
+                    <Text style={styles.fieldLabel}>AMOUNT</Text>
+                    <View style={styles.unitSwitch}>
+                      {(
+                        [
+                          'ZEC',
+                          'zats',
+                          ...(currency != null && price != null
+                            ? (['fiat'] as const)
+                            : []),
+                        ] as const
+                      ).map(option => {
+                        const on =
+                          option === 'fiat'
+                            ? fiat != null
+                            : fiat == null && option === unit;
+                        return (
+                          <Pressable
+                            key={option}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: on }}
+                            onPress={() => chooseInput(option)}
+                          >
+                            <Text
+                              style={[styles.unitOption, on && styles.unitOn]}
+                            >
+                              {option === 'fiat' ? currency : option}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                  <TextInput
+                    style={styles.amountInput}
+                    value={max ? maxText : amount}
+                    onChangeText={text => {
+                      setMax(false);
+                      setAmount(text);
+                    }}
+                    keyboardType={
+                      fiat != null || unit === 'ZEC'
+                        ? 'decimal-pad'
+                        : 'number-pad'
+                    }
+                    placeholder={
+                      fiat != null ? '0.00' : unit === 'ZEC' ? '0.000' : '0'
+                    }
+                    placeholderTextColor={colors.textMuted}
+                    selectionColor={colors.gold}
+                  />
+                  <View style={styles.amountFoot}>
+                    <Text style={styles.hint}>
+                      {max
+                        ? 'Everything; the fee comes out of it.'
+                        : fiat != null && parseTyped(amount) != null
+                        ? `≈ ${formatExact(parseTyped(amount) ?? '0', unit)}`
+                        : `${formatExact(
+                            wallet.spendableZatoshi,
+                            unit,
+                          )}${approx(wallet.spendableZatoshi)} available`}
+                    </Text>
                     <Pressable
-                      key={contact.id}
                       accessibilityRole="button"
+                      accessibilityState={{ selected: max }}
+                      hitSlop={10}
                       onPress={() => {
-                        setAddress(contact.address);
-                        setStep({ name: 'form' });
+                        setAmount('');
+                        setMax(!max);
                       }}
-                      style={({ pressed }) => [
-                        styles.row,
-                        pressed && styles.pressed,
-                      ]}
+                      style={[styles.maxChip, max && styles.maxChipOn]}
                     >
-                      <Text style={styles.rowValue}>{contact.name}</Text>
-                      <Text style={styles.rowSub}>
-                        {shortenAddress(contact.address, 10)}
+                      <Text style={[styles.maxLabel, max && styles.maxLabelOn]}>
+                        Max
                       </Text>
                     </Pressable>
-                  ))}
-                </View>
-              )}
-
-              {address.trim() !== '' &&
-                contactName(contacts, address) == null && (
-                  <>
-                    <Text style={styles.label}>
-                      Save {shortenAddress(address.trim(), 8)} as a contact
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      value={newName}
-                      onChangeText={setNewName}
-                      placeholder="Name"
-                      placeholderTextColor={colors.goldDim}
-                      selectionColor={colors.gold}
-                    />
-                    <View style={styles.gap} />
-                    <Button
-                      label="Save contact"
-                      variant="quiet"
-                      busy={busy}
-                      disabled={newName.trim() === ''}
-                      onPress={saveContact}
-                    />
-                  </>
-                )}
-              {error != null && <Text style={styles.error}>{error}</Text>}
-            </ScrollView>
-            <Button
-              label="Back"
-              variant="back"
-              onPress={() => {
-                setError(null);
-                setStep({ name: 'form' });
-              }}
-            />
-          </>
-        )}
-
-        {step.name === 'scan' && (
-          <>
-            <SheetHeader
-              title="Scan address"
-              subtitle="Point the camera at a Zcash QR code."
-            />
-            <View style={styles.cameraFrame}>
-              <Camera
-                style={styles.camera}
-                scanBarcode
-                showFrame={false}
-                onReadCode={event =>
-                  onScanned(event.nativeEvent.codeStringValue)
-                }
-              />
-            </View>
-            <Text style={styles.hint}>
-              The camera only works on a real phone, not in the simulator.
-            </Text>
-            <View style={styles.gap} />
-            <Button
-              label="Cancel"
-              variant="back"
-              onPress={() => setStep({ name: 'form' })}
-            />
-          </>
-        )}
-
-        {step.name === 'review' && (
-          <>
-            <ScrollView contentContainerStyle={styles.scroll}>
-              <SheetHeader
-                title="Check before releasing"
-                subtitle="Nothing has left the lock yet. A released payment cannot be reversed."
-              />
-
-              <View style={[card, styles.receipt]}>
-                <ReceiptRow
-                  label="To"
-                  value={
-                    isOwnAddress(step.review.toAddress)
-                      ? 'Yourself'
-                      : contactName(contacts, step.review.toAddress) ??
-                        'New address'
-                  }
-                  strong
-                />
-                <Text style={styles.receiptAddress} selectable>
-                  {grouped(step.review.toAddress)}
-                </Text>
-                <ReceiptRow
-                  label={
-                    isOwnAddress(step.review.toAddress)
-                      ? 'Arrives at your address'
-                      : 'They receive'
-                  }
-                  value={formatExact(step.review.zatoshi, unit)}
-                  strong
-                />
-                <ReceiptRow
-                  label="Network fee"
-                  value={formatExact(step.review.fee, unit)}
-                />
-                <View style={styles.receiptRule} />
-                <ReceiptRow
-                  label="Total released"
-                  value={formatExact(reviewTotal(step.review), unit)}
-                  strong
-                />
-                <ReceiptRow
-                  label="Stays locked"
-                  value={formatExact(
-                    remaining(wallet.totalZatoshi, step.review),
-                    unit,
+                  </View>
+                  {!max && (
+                    <Pressable
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: feeIncluded }}
+                      hitSlop={8}
+                      onPress={() => setFeeIncluded(f => !f)}
+                      style={styles.feeRow}
+                    >
+                      <View style={[styles.box, feeIncluded && styles.boxOn]}>
+                        {feeIncluded && <Text style={styles.boxTick}>✓</Text>}
+                      </View>
+                      <Text style={styles.feeText}>
+                        {feeIncluded
+                          ? 'Fee included: the receiver gets this minus the fee'
+                          : 'Include the network fee in this amount'}
+                      </Text>
+                    </Pressable>
                   )}
-                  accent
-                />
-                {currency != null && price != null && (
-                  <Text style={styles.receiptSub}>
-                    Total ≈{' '}
-                    {formatFiat(reviewTotal(step.review), price, currency)}
+                  {confirming !== '0' && (
+                    <Confirming
+                      text={`${formatExact(confirming, unit)} ${waitingText(
+                        slowestWaiting(
+                          wallet.transactions,
+                          wallet.networkHeight,
+                        ),
+                      )}`}
+                    />
+                  )}
+
+                  {!transparent && (noteOpen || memo !== '') && (
+                    <>
+                      <View style={styles.rule} />
+                      <Text style={styles.fieldLabel}>PRIVATE NOTE</Text>
+                      <TextInput
+                        style={styles.noteInput}
+                        value={memo}
+                        onChangeText={setMemo}
+                        multiline
+                        maxLength={500}
+                        autoFocus={memo === ''}
+                        placeholder="Only the receiver can read this"
+                        placeholderTextColor={colors.goldDim}
+                        selectionColor={colors.gold}
+                      />
+                    </>
+                  )}
+                </View>
+
+                {!transparent && !noteOpen && memo === '' && (
+                  <Pressable
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={() => setNoteOpen(true)}
+                    style={styles.addNote}
+                  >
+                    <Text style={styles.addNoteText}>+ Add a private note</Text>
+                  </Pressable>
+                )}
+
+                {nu7Paused && <Text style={styles.error}>{NU7_PAUSED}</Text>}
+                {torBlocked && !nu7Paused && (
+                  <Text style={styles.error}>
+                    Tor is not connected yet. Sending waits until it is, so your
+                    internet address stays hidden. Or switch Tor off under
+                    Settings › Network.
                   </Text>
                 )}
-                {step.review.memo !== '' && (
-                  <>
-                    <View style={styles.receiptRule} />
-                    <Text style={styles.receiptLabel}>Private note</Text>
-                    <Text style={styles.receiptNote} selectable>
-                      {step.review.memo}
+                {error != null && <Text style={styles.error}>{error}</Text>}
+              </ScrollView>
+              <BrassButton
+                label="Review"
+                icon="arrowUp"
+                onPress={review}
+                busy={busy}
+                disabled={torBlocked}
+              />
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={onClose}
+                style={styles.quietButton}
+              >
+                <Text style={styles.quietText}>Cancel</Text>
+              </Pressable>
+            </>
+          )}
+
+          {step.name === 'contacts' && (
+            <>
+              <ScrollView
+                contentContainerStyle={styles.scroll}
+                keyboardShouldPersistTaps="handled"
+              >
+                <SheetHeader title="Contacts" />
+                {contacts.length === 0 ? (
+                  <Text style={styles.body}>
+                    No contacts yet. Type or scan an address on the send screen
+                    and save it here, or add contacts in Settings.
+                  </Text>
+                ) : (
+                  <View style={styles.card}>
+                    {contacts.map(contact => (
+                      <Pressable
+                        key={contact.id}
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setAddress(contact.address);
+                          setStep({ name: 'form' });
+                        }}
+                        style={({ pressed }) => [
+                          styles.row,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.rowValue}>{contact.name}</Text>
+                        <Text style={styles.rowSub}>
+                          {shortenAddress(contact.address, 10)}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+
+                {address.trim() !== '' &&
+                  contactName(contacts, address) == null && (
+                    <>
+                      <Text style={styles.label}>
+                        Save {shortenAddress(address.trim(), 8)} as a contact
+                      </Text>
+                      <TextInput
+                        style={styles.input}
+                        value={newName}
+                        onChangeText={setNewName}
+                        placeholder="Name"
+                        placeholderTextColor={colors.goldDim}
+                        selectionColor={colors.gold}
+                      />
+                      <View style={styles.gap} />
+                      <Button
+                        label="Save contact"
+                        variant="quiet"
+                        busy={busy}
+                        disabled={newName.trim() === ''}
+                        onPress={saveContact}
+                      />
+                    </>
+                  )}
+                {error != null && <Text style={styles.error}>{error}</Text>}
+              </ScrollView>
+              <Button
+                label="Back"
+                variant="back"
+                onPress={() => {
+                  setError(null);
+                  setStep({ name: 'form' });
+                }}
+              />
+            </>
+          )}
+
+          {step.name === 'scan' && (
+            <>
+              <SheetHeader
+                title="Scan address"
+                subtitle="Point the camera at a Zcash QR code."
+              />
+              <View style={styles.cameraFrame}>
+                <Camera
+                  style={styles.camera}
+                  scanBarcode
+                  showFrame={false}
+                  onReadCode={event =>
+                    onScanned(event.nativeEvent.codeStringValue)
+                  }
+                />
+              </View>
+              <Text style={styles.hint}>
+                The camera only works on a real phone, not in the simulator.
+              </Text>
+              <View style={styles.gap} />
+              <Button
+                label="Cancel"
+                variant="back"
+                onPress={() => setStep({ name: 'form' })}
+              />
+            </>
+          )}
+
+          {step.name === 'review' && (
+            <>
+              <ScrollView contentContainerStyle={styles.scroll}>
+                <RoomHeader
+                  open
+                  compact
+                  title="Check before sending"
+                  subtitle="Nothing has left the lock yet. Once sent, it can't be undone."
+                />
+
+                <View style={[plate, styles.receipt]}>
+                  <ReceiptRow
+                    label="To"
+                    value={
+                      isOwnAddress(step.review.toAddress)
+                        ? 'Yourself'
+                        : contactName(contacts, step.review.toAddress) ??
+                          'New address'
+                    }
+                    strong
+                  />
+                  <Text style={styles.receiptAddress} selectable>
+                    {grouped(step.review.toAddress)}
+                  </Text>
+                  <ReceiptRow
+                    label={
+                      isOwnAddress(step.review.toAddress)
+                        ? 'Arrives at your address'
+                        : 'They receive'
+                    }
+                    value={formatExact(step.review.zatoshi, unit)}
+                    strong
+                  />
+                  <ReceiptRow
+                    label="Network fee"
+                    value={formatExact(step.review.fee, unit)}
+                  />
+                  <View style={styles.receiptRule} />
+                  <ReceiptRow
+                    label="Total sent"
+                    value={formatExact(reviewTotal(step.review), unit)}
+                    strong
+                  />
+                  {currency != null && price != null && (
+                    <Text style={styles.receiptSub}>
+                      ≈ {formatFiat(reviewTotal(step.review), price, currency)}
                     </Text>
-                  </>
+                  )}
+                  <ReceiptRow
+                    label="Stays locked"
+                    value={formatExact(
+                      remaining(wallet.totalZatoshi, step.review),
+                      unit,
+                    )}
+                    accent
+                  />
+                  {step.review.memo !== '' && (
+                    <>
+                      <View style={styles.receiptRule} />
+                      <Text style={styles.receiptLabel}>Private note</Text>
+                      <Text style={styles.receiptNote} selectable>
+                        {step.review.memo}
+                      </Text>
+                    </>
+                  )}
+                </View>
+
+                {waiting > 0 && (
+                  <Text style={styles.error}>
+                    A payment from this phone is still waiting to go out. Check
+                    Activity first, so you do not pay twice.
+                  </Text>
+                )}
+                {error != null && <Text style={styles.error}>{error}</Text>}
+              </ScrollView>
+              {keyNeeded && (
+                <Text style={styles.keyHint}>
+                  Tapping your key sends it. Check everything above first.
+                </Text>
+              )}
+              <BrassButton
+                label={`Send ${formatExact(step.review.zatoshi, unit)}${
+                  keyNeeded ? ' with your key' : ''
+                }`}
+                icon="arrowUp"
+                onPress={() => send(step.review)}
+                busy={busy}
+                disabled={torBlocked}
+              />
+              <View style={styles.gap} />
+              <Button
+                label="Change"
+                variant="back"
+                disabled={busy}
+                onPress={() => {
+                  setError(null);
+                  setStep({ name: 'form' });
+                }}
+              />
+            </>
+          )}
+
+          {step.name === 'saved' && (
+            <>
+              <RoomHeader
+                open={false}
+                bare
+                title="Payment saved"
+                subtitle="Made, but not delivered yet."
+              />
+              <View style={styles.center}>
+                <View style={styles.doneLock}>
+                  <ZeckyLock open={!closedAgain} size={120} />
+                </View>
+                <Text style={[styles.error, styles.centerText]}>
+                  {step.message}
+                </Text>
+                <Text style={[styles.body, styles.centerText]}>
+                  Activity shows it as “Waiting to send”. Do not send it again.
+                  You can close this screen.
+                </Text>
+                {step.detail != null && (
+                  <Text style={[styles.detail, styles.centerText]} selectable>
+                    Technical detail: {step.detail}
+                  </Text>
                 )}
               </View>
+              <Button label="Done" onPress={onClose} />
+            </>
+          )}
 
-              {waiting > 0 && (
-                <Text style={styles.error}>
-                  A release from this phone is still waiting to go out. Check
-                  Activity first, so you do not pay twice.
+          {step.name === 'sent' && (
+            <>
+              <RoomHeader
+                open={false}
+                bare
+                title="Sent"
+                subtitle="The lock closes again."
+              />
+              <View style={styles.center}>
+                <View style={styles.doneLock}>
+                  <ZeckyLock open={!closedAgain} size={120} />
+                </View>
+                <Text style={[styles.body, styles.centerText]}>
+                  It shows as confirmed once it is in a block, usually within a
+                  few minutes. The rest stays locked.
                 </Text>
-              )}
-              {error != null && <Text style={styles.error}>{error}</Text>}
-            </ScrollView>
-            {keyNeeded && (
-              <Text style={styles.keyHint}>
-                Tapping your key sends it. Check everything above first.
-              </Text>
-            )}
-            <BrassButton
-              label={`Release ${formatExact(step.review.zatoshi, unit)}${
-                keyNeeded ? ' with your key' : ''
-              }`}
-              icon="arrowUp"
-              onPress={() => send(step.review)}
-              busy={busy}
-              disabled={torBlocked}
-            />
-            <View style={styles.gap} />
-            <Button
-              label="Change"
-              variant="back"
-              disabled={busy}
-              onPress={() => {
-                setError(null);
-                setStep({ name: 'form' });
-              }}
-            />
-          </>
-        )}
-
-        {step.name === 'saved' && (
-          <>
-            <SheetHeader
-              title="Release saved"
-              subtitle="Made, but not delivered yet."
-            />
-            <View style={styles.center}>
-              <View style={styles.doneLock}>
-                <ZeckyLock open={!closedAgain} size={120} />
-              </View>
-              <Text style={[styles.error, styles.centerText]}>
-                {step.message}
-              </Text>
-              <Text style={[styles.body, styles.centerText]}>
-                Activity shows it as “Waiting to release”. Do not release it
-                again. You can close this screen.
-              </Text>
-              {step.detail != null && (
-                <Text style={[styles.detail, styles.centerText]} selectable>
-                  Technical detail: {step.detail}
+                <Text style={[styles.hint, styles.centerText]} selectable>
+                  Transaction {shortenAddress(step.txId, 12)}
                 </Text>
-              )}
-            </View>
-            <Button label="Done" onPress={onClose} />
-          </>
-        )}
-
-        {step.name === 'sent' && (
-          <>
-            <SheetHeader title="Released" subtitle="The lock closes again." />
-            <View style={styles.center}>
-              <View style={styles.doneLock}>
-                <ZeckyLock open={!closedAgain} size={120} />
               </View>
-              <Text style={[styles.body, styles.centerText]}>
-                It shows as confirmed once it is in a block, usually within a
-                few minutes. The rest stays locked.
-              </Text>
-              <Text style={[styles.hint, styles.centerText]} selectable>
-                Transaction {shortenAddress(step.txId, 12)}
-              </Text>
-            </View>
-            <Button label="Done" onPress={onClose} />
-          </>
-        )}
-      </KeyboardAvoidingView>
+              <Button label="Done" onPress={onClose} />
+            </>
+          )}
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -843,11 +952,13 @@ function ReceiptRow(props: {
 const useStyles = makeStyles(colors => ({
   // Sheets reach under the home indicator: the bottom buttons sit higher,
   // clear of the swipe area and easy to reach with a thumb.
+  safe: { flex: 1, backgroundColor: colors.ink },
   container: {
     flex: 1,
     backgroundColor: colors.ink,
-    padding: space.lg,
-    paddingBottom: space.xl + space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.md,
     overflow: 'hidden',
   },
   scroll: { paddingBottom: space.lg, paddingTop: space.sm },
@@ -907,12 +1018,41 @@ const useStyles = makeStyles(colors => ({
   },
   // A fixed height: iOS sizes a text field once, sometimes before the
   // serif font is ready, and then clips the top of the large digits.
+  feeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: space.md,
+  },
+  box: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.goldDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  boxOn: { borderColor: colors.gold, backgroundColor: colors.gold + '22' },
+  boxTick: {
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 13,
+    lineHeight: 16,
+    color: colors.gold,
+  },
+  feeText: {
+    flex: 1,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
   amountInput: {
     fontFamily: fonts.serifMedium,
-    fontSize: 40,
+    fontSize: 52,
     color: colors.text,
-    height: 62,
-    paddingTop: 6,
+    textAlign: 'center',
+    height: 78,
+    paddingTop: 8,
     paddingBottom: 0,
     fontVariant: ['tabular-nums'],
   },

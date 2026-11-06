@@ -7,7 +7,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Confirming } from '../components/Confirming';
 import { Icon } from '../components/Icon';
 import { Toast, ToastMessage } from '../components/Toast';
 import {
@@ -39,7 +38,6 @@ import {
 import { txKind } from '../lib/transactions';
 import { daysSince, lockedSince } from '../lib/lockedSince';
 import { nextMilestone } from '../lib/milestones';
-import { slowestWaiting, waitingText } from '../lib/confirmations';
 import { confirmOwner } from '../lib/deviceAuth';
 import { usePinEnabled } from '../lib/pin';
 import { SYNC_DROPPED } from '../lib/errors';
@@ -55,20 +53,8 @@ import { tapLockStep } from '../lib/lockRules';
 import { useHomeNodeReachable, useNetwork } from '../lib/network';
 import { torBlocksRelease, useTorWanted } from '../lib/tor';
 import { nu7Pauses } from '../lib/upgrades';
-import {
-  Unit,
-  confirmingZatoshi,
-  formatDisplay,
-  formatExact,
-} from '../lib/zec';
-import {
-  fonts,
-  makeStyles,
-  setThemeMode,
-  space,
-  useColors,
-  useIsDark,
-} from '../theme';
+import { Unit, formatDisplay, formatExact } from '../lib/zec';
+import { fonts, makeStyles, space, useColors } from '../theme';
 import type { StoredWallet } from '../wallet/seed';
 import { SyncStatus, useSynchronizer } from '../wallet/useSynchronizer';
 import { ActivityScreen } from './ActivityScreen';
@@ -115,7 +101,12 @@ function statusLine(
     case 'SYNCING':
       return `Syncing ${Math.floor(progress)}%${via}`;
     case 'SYNCED':
-      return `Up to date${via}`;
+      // Calm when the server is a public one or Rock it by its Tailscale
+      // name. A home or 100.x address cannot be authenticated, so that one
+      // stays named (self-audit N2).
+      return node === 'home' || node === 'tailscaleIp'
+        ? `Up to date${via}`
+        : 'Up to date';
     case 'DISCONNECTED':
       return node == null ? 'Offline' : `${nodeLabel(node)} not reachable`;
     case 'STOPPED':
@@ -144,13 +135,10 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     state.scanProgress < 100;
   const shownStatus = catchingUp ? 'SYNCING' : state.status;
   const synced = shownStatus === 'SYNCED' && !cutOff;
-  const confirming = confirmingZatoshi(state);
-  const waiting = slowestWaiting(state.transactions, state.networkHeight);
   const [receiving, setReceiving] = useState(false);
   const [sending, setSending] = useState(false);
   const [unit, setUnit] = useState<Unit>(loadUnit);
   const [hidden, setHidden] = useState<boolean>(loadHidden);
-  const dark = useIsDark();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsStart, setSettingsStart] = useState<
     'server' | 'phrase' | 'display' | 'seckey' | undefined
@@ -291,7 +279,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         key: txId,
         txId,
         kind: 'sent',
-        title: 'Released',
+        title: 'Sent',
         detail: amountRef.current(zatoshi),
       },
     ]);
@@ -392,7 +380,6 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const [area, setArea] = useState(0);
   const below =
     270 +
-    (confirming !== '0' ? 28 : 0) +
     (outside || lockingIn ? 24 : 0) +
     (phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n ? 24 : 0) +
     (!currencyChosen ? 22 : 0);
@@ -426,16 +413,16 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     since == null || heldDays == null
       ? BigInt(state.totalZatoshi) > 0n
         ? 'Locked on this iPhone'
-        : 'Nothing locked yet. Tap Lock more to begin.'
+        : 'Nothing locked yet. Tap Receive to begin.'
       : heldDays === 0
       ? 'Locked since today'
       : `Locked for ${heldDays} ${heldDays === 1 ? 'day' : 'days'}`;
   // One quiet line: how long, and the next milestone the ring is filling to.
   const milestoneText =
     since != null && milestone != null
-      ? `${milestone.name} in ${milestone.inDays} ${
-          milestone.inDays === 1 ? 'day' : 'days'
-        }`
+      ? `${milestone.name} on ${new Date(
+          Date.now() + milestone.inDays * 86_400_000,
+        ).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
       : null;
   // Home only mentions a payment while it waits for a block; the rest of
   // the history is in Activity.
@@ -450,7 +437,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const lastLine = (() => {
     if (last == null) return null;
     const lockedIn = txKind(last) === 'received';
-    const what = lockedIn ? 'Locking in' : 'Releasing';
+    const what = lockedIn ? 'Receiving' : 'Sending';
     const when =
       last.minedHeight > 0 && last.blockTimeInSeconds > 0
         ? new Date(last.blockTimeInSeconds * 1000).toLocaleDateString('en-US', {
@@ -568,17 +555,6 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         <View style={styles.topIcons}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={
-              dark ? 'Switch to light theme' : 'Switch to dark theme'
-            }
-            hitSlop={10}
-            onPress={() => setThemeMode(dark ? 'light' : 'dark')}
-            style={styles.topIcon}
-          >
-            <Icon name={dark ? 'sun' : 'moon'} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
             accessibilityLabel={hidden ? 'Show amounts' : 'Hide amounts'}
             hitSlop={10}
             onPress={toggleHidden}
@@ -616,7 +592,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             }
             accessibilityHint={
               lockOpen
-                ? 'Opens Release Zcash'
+                ? 'Opens Send Zcash'
                 : 'Asks whether you really want to open the lock'
             }
             onPress={tapLock}
@@ -736,23 +712,12 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             </Text>
           </Pressable>
         )}
-        {confirming !== '0' && (
-          <View style={styles.centerRow}>
-            <Confirming
-              text={
-                hidden
-                  ? `Part of your balance is ${waitingText(waiting)}`
-                  : `${formatExact(confirming, unit)} ${waitingText(waiting)}`
-              }
-            />
-          </View>
-        )}
 
         {lockOpen ? (
           <>
             <View style={styles.brass}>
               <BrassButton
-                label="Release Zcash"
+                label="Send Zcash"
                 icon="arrowUp"
                 onPress={() => setSending(true)}
               />
@@ -768,7 +733,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
           </>
         ) : (
           <View style={styles.brass}>
-            <BrassButton label="Lock more" onPress={() => setReceiving(true)} />
+            <BrassButton label="Receive" onPress={() => setReceiving(true)} />
           </View>
         )}
 
@@ -811,8 +776,6 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
           />
           <Text style={styles.status} numberOfLines={2}>
             {statusText}
-            <Text style={styles.statusSep}> · </Text>
-            Shielded
           </Text>
           {torWanted && (
             <Pressable
@@ -1009,7 +972,6 @@ const useStyles = makeStyles(colors => ({
   ringWaiting: { opacity: 0.5 },
   lockButton: { marginTop: 10 },
   center: { textAlign: 'center' },
-  centerRow: { alignItems: 'center' },
   balanceRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -1092,7 +1054,6 @@ const useStyles = makeStyles(colors => ({
     fontSize: 12,
     color: colors.textMuted,
   },
-  statusSep: { opacity: 0.6 },
   tor: { marginLeft: space.sm },
   torStarting: { opacity: 0.45 },
   links: { flexDirection: 'row', marginLeft: space.md },

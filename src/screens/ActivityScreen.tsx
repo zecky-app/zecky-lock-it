@@ -31,7 +31,7 @@ interface Props {
   onClose: () => void;
 }
 
-const FILTERS = ['All', 'Locked', 'Released'] as const;
+const FILTERS = ['All', 'Received', 'Sent'] as const;
 type Filter = (typeof FILTERS)[number];
 
 /** "OCTOBER 2026", or WAITING for payments not in a block yet. */
@@ -81,8 +81,8 @@ export function ActivityScreen({
   const sections = useMemo(() => {
     const chosen = transactions.filter(tx => {
       const kind = txKind(tx);
-      if (filter === 'Locked') return kind === 'received';
-      if (filter === 'Released') return kind === 'sent' || kind === 'self';
+      if (filter === 'Received') return kind === 'received';
+      if (filter === 'Sent') return kind === 'sent' || kind === 'self';
       return true;
     });
     const out: { title: string; data: Transaction[] }[] = [];
@@ -127,14 +127,14 @@ export function ActivityScreen({
           <>
             <SheetHeader
               title="Activity"
-              subtitle="Every time you locked more or released."
+              subtitle="Everything you received and sent."
             />
             {transactions.length === 0 ? (
               <View style={styles.emptyBox}>
                 <ZeckyLock open={false} size={90} />
                 <Text style={styles.emptyTitle}>Nothing locked yet</Text>
                 <Text style={styles.empty}>
-                  When Zcash arrives at your Lock more address, it shows up
+                  When Zcash arrives at your address, it shows up
                   here.
                 </Text>
               </View>
@@ -142,7 +142,7 @@ export function ActivityScreen({
               <>
                 <View style={[card, styles.summary]}>
                   <Stat
-                    label="LOCKED IN"
+                    label="RECEIVED"
                     value={
                       hidden
                         ? '••••'
@@ -155,7 +155,7 @@ export function ActivityScreen({
                   />
                   <View style={styles.statLine} />
                   <Stat
-                    label="RELEASED"
+                    label="SENT"
                     value={
                       hidden
                         ? '••••'

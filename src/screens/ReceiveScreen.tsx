@@ -11,10 +11,12 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '../components/Button';
 import { QrCode } from '../components/QrCode';
 import {
   BrassButton,
+  RoomHeader,
   SheetCorner,
   SheetHeader,
   useCardStyle,
@@ -43,13 +45,14 @@ type Mode = 'private' | 'public';
 export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
   const colors = useColors();
   const styles = useStyles();
+  const insets = useSafeAreaInsets();
   const card = useCardStyle();
   const { width, height } = useWindowDimensions();
   // Sized to the screen, so the whole sheet fits without scrolling.
   const qrSize = Math.min(
     width - space.lg * 2 - 10,
     260,
-    Math.round(height * 0.3),
+    Math.round(height * 0.27),
   );
   const [mode, setMode] = useState<Mode>('private');
   const [listOpen, setListOpen] = useState(false);
@@ -176,240 +179,251 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
   return (
     <Modal
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
+      animationType="fade"
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
-        <SheetCorner />
-        {listOpen ? (
-          <>
-            <ScrollView contentContainerStyle={styles.scroll}>
-              <SheetHeader
-                title="Your shielded addresses"
-                subtitle="The number shows how many payments each address has received. Tap one to show it."
-              />
-              <View style={[card, styles.listCard]}>
-                {all.map((a, i) => (
-                  <Pressable
-                    key={a}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setSelected(a);
-                      setMode('private');
-                      setListOpen(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.row,
-                      i > 0 && styles.rowLine,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <View style={styles.rowText}>
-                      <Text style={styles.rowAddress}>
-                        {shortenAddress(a, 12)}{' '}
-                        <Text style={styles.rowCount}>({used(a)})</Text>
-                      </Text>
-                      {a === defaultAddress && (
-                        <Text style={styles.rowNote}>First address</Text>
-                      )}
-                    </View>
-                    {a === (selected ?? defaultAddress) && (
-                      <Text style={styles.rowShown}>Shown</Text>
-                    )}
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
-            <Button
-              label="Create a new address"
-              busy={busy}
-              onPress={async () => {
-                await addNew(generated);
-                setListOpen(false);
-              }}
-            />
-            <View style={styles.gap} />
-            <Button
-              label="Back"
-              variant="back"
-              onPress={() => setListOpen(false)}
-            />
-          </>
-        ) : (
-          <>
-            <ScrollView
-              contentContainerStyle={styles.scroll}
-              keyboardShouldPersistTaps="handled"
-              automaticallyAdjustKeyboardInsets
-            >
-              <SheetHeader
-                title={mode === 'private' ? 'Lock more' : 'Transparent address'}
-                subtitle={
-                  mode === 'private'
-                    ? 'Your shielded address. Amount and sender stay hidden.'
-                    : 'Visible to everyone, like Bitcoin. Only for senders that cannot pay a shielded address.'
-                }
-              />
-
-              <View style={styles.middle}>
-                {address == null ? (
-                  <Text style={[styles.body, styles.centerText]}>
-                    Preparing your address…
-                  </Text>
-                ) : (
-                  <>
-                    <View
-                      style={[
-                        styles.qrOuter,
-                        mode === 'public' && styles.qrOuterPublic,
-                      ]}
-                    >
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Copy address"
-                        onPress={() => copy(address)}
-                        style={[
-                          styles.qrInner,
-                          mode === 'public' && styles.qrInnerPublic,
-                        ]}
-                      >
-                        <QrCode
-                          value={
-                            requested == null
-                              ? address
-                              : buildPaymentUri(address, requested)
-                          }
-                          size={qrSize}
-                          badge
-                        />
-                      </Pressable>
-                    </View>
-                    {requested != null && (
-                      <Text style={[styles.requestLine, styles.centerText]}>
-                        Requesting {formatExact(requested, unit)}
-                      </Text>
-                    )}
-
+      <View
+        style={[
+          styles.safe,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
+        <View style={styles.container}>
+          {listOpen && <SheetCorner />}
+          {listOpen ? (
+            <>
+              <ScrollView contentContainerStyle={styles.scroll}>
+                <SheetHeader
+                  title="Your shielded addresses"
+                  subtitle="The number shows how many payments each address has received. Tap one to show it."
+                />
+                <View style={[card, styles.listCard]}>
+                  {all.map((a, i) => (
                     <Pressable
+                      key={a}
                       accessibilityRole="button"
-                      accessibilityLabel="Copy address"
-                      accessibilityHint="Press and hold to show the full address"
-                      hitSlop={8}
-                      onPress={() => copy(address)}
-                      onLongPress={() => setFull(f => !f)}
+                      onPress={() => {
+                        setSelected(a);
+                        setMode('private');
+                        setListOpen(false);
+                      }}
                       style={({ pressed }) => [
-                        styles.addressTap,
+                        styles.row,
+                        i > 0 && styles.rowLine,
                         pressed && styles.pressed,
                       ]}
                     >
-                      <Text style={styles.address} selectable>
-                        {full ? grouped(address) : groupedShort(address)}
-                      </Text>
-                      <Text style={[styles.copied, !copied && styles.dimmed]}>
-                        {copied
-                          ? requested == null
-                            ? 'Address copied ✓'
-                            : 'Payment request copied ✓'
-                          : 'Tap to copy'}
-                      </Text>
+                      <View style={styles.rowText}>
+                        <Text style={styles.rowAddress}>
+                          {shortenAddress(a, 12)}{' '}
+                          <Text style={styles.rowCount}>({used(a)})</Text>
+                        </Text>
+                        {a === defaultAddress && (
+                          <Text style={styles.rowNote}>First address</Text>
+                        )}
+                      </View>
+                      {a === (selected ?? defaultAddress) && (
+                        <Text style={styles.rowShown}>Shown</Text>
+                      )}
                     </Pressable>
-                    {mode === 'public' && (
-                      <Text style={[styles.warning, styles.centerText]}>
-                        Anyone can see payments to this address. Shield the
-                        funds afterwards.
-                      </Text>
-                    )}
-                  </>
-                )}
+                  ))}
+                </View>
+              </ScrollView>
+              <Button
+                label="Create a new address"
+                busy={busy}
+                onPress={async () => {
+                  await addNew(generated);
+                  setListOpen(false);
+                }}
+              />
+              <View style={styles.gap} />
+              <Button
+                label="Back"
+                variant="back"
+                onPress={() => setListOpen(false)}
+              />
+            </>
+          ) : (
+            <>
+              <ScrollView
+                contentContainerStyle={styles.scroll}
+                keyboardShouldPersistTaps="handled"
+                automaticallyAdjustKeyboardInsets
+              >
+                <RoomHeader
+                  open={false}
+                  compact={height < 800}
+                  title={
+                    mode === 'private' ? 'Receive' : 'Transparent address'
+                  }
+                  subtitle={
+                    mode === 'private'
+                      ? 'Your shielded address. Amount and sender stay hidden.'
+                      : 'Visible to everyone, like Bitcoin. Only for senders that cannot pay a shielded address.'
+                  }
+                />
 
-                {requesting && (
-                  <View style={styles.requestBox}>
-                    <TextInput
-                      style={styles.input}
-                      value={requestText}
-                      onChangeText={setRequestText}
-                      keyboardType={
-                        unit === 'ZEC' ? 'decimal-pad' : 'number-pad'
-                      }
-                      placeholder={`Amount in ${unit}`}
-                      placeholderTextColor={colors.goldDim}
-                      selectionColor={colors.gold}
-                      autoFocus
-                    />
-                  </View>
-                )}
-              </View>
+                <View style={styles.middle}>
+                  {address == null ? (
+                    <Text style={[styles.body, styles.centerText]}>
+                      Preparing your address…
+                    </Text>
+                  ) : (
+                    <>
+                      <View
+                        style={[
+                          styles.qrOuter,
+                          mode === 'public' && styles.qrOuterPublic,
+                        ]}
+                      >
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Copy address"
+                          onPress={() => copy(address)}
+                          style={[
+                            styles.qrInner,
+                            mode === 'public' && styles.qrInnerPublic,
+                          ]}
+                        >
+                          <QrCode
+                            value={
+                              requested == null
+                                ? address
+                                : buildPaymentUri(address, requested)
+                            }
+                            size={qrSize}
+                            badge
+                          />
+                        </Pressable>
+                      </View>
+                      {requested != null && (
+                        <Text style={[styles.requestLine, styles.centerText]}>
+                          Requesting {formatExact(requested, unit)}
+                        </Text>
+                      )}
 
-              <View style={styles.links}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Copy address"
+                        accessibilityHint="Press and hold to show the full address"
+                        hitSlop={8}
+                        onPress={() => copy(address)}
+                        onLongPress={() => setFull(f => !f)}
+                        style={({ pressed }) => [
+                          styles.addressTap,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.address} selectable>
+                          {full ? grouped(address) : groupedShort(address)}
+                        </Text>
+                        <Text style={[styles.copied, !copied && styles.dimmed]}>
+                          {copied
+                            ? requested == null
+                              ? 'Address copied ✓'
+                              : 'Payment request copied ✓'
+                            : 'Tap to copy'}
+                        </Text>
+                      </Pressable>
+                      {mode === 'public' && (
+                        <Text style={[styles.warning, styles.centerText]}>
+                          Anyone can see payments to this address. Shield the
+                          funds afterwards.
+                        </Text>
+                      )}
+                    </>
+                  )}
+
+                  {requesting && (
+                    <View style={styles.requestBox}>
+                      <TextInput
+                        style={styles.input}
+                        value={requestText}
+                        onChangeText={setRequestText}
+                        keyboardType={
+                          unit === 'ZEC' ? 'decimal-pad' : 'number-pad'
+                        }
+                        placeholder={`Amount in ${unit}`}
+                        placeholderTextColor={colors.goldDim}
+                        selectionColor={colors.gold}
+                        autoFocus
+                      />
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.links}>
+                  <Pressable
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={() => {
+                      if (requesting) setRequestText('');
+                      setRequesting(!requesting);
+                    }}
+                  >
+                    <Text style={styles.linkLabel}>
+                      {requesting ? 'Remove amount' : 'Request an amount'}
+                    </Text>
+                  </Pressable>
+                  {mode === 'private' && (
+                    <>
+                      <Text style={styles.linkDot}>·</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        hitSlop={10}
+                        onPress={() => setListOpen(true)}
+                      >
+                        <Text style={styles.linkLabel}>All addresses</Text>
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+                {/* The address switch on its own quiet line, so the links
+                  above stay short. */}
                 <Pressable
                   accessibilityRole="button"
                   hitSlop={10}
-                  onPress={() => {
-                    if (requesting) setRequestText('');
-                    setRequesting(!requesting);
-                  }}
+                  onPress={() =>
+                    setMode(mode === 'private' ? 'public' : 'private')
+                  }
+                  style={styles.switchLink}
                 >
-                  <Text style={styles.linkLabel}>
-                    {requesting ? 'Remove amount' : 'Request an amount'}
+                  <Text style={styles.switchLabel}>
+                    {mode === 'private'
+                      ? 'Sender can’t pay shielded? Transparent address ›'
+                      : '‹ Back to your shielded address'}
                   </Text>
                 </Pressable>
-                {mode === 'private' && (
-                  <>
-                    <Text style={styles.linkDot}>·</Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      hitSlop={10}
-                      onPress={() => setListOpen(true)}
-                    >
-                      <Text style={styles.linkLabel}>All addresses</Text>
-                    </Pressable>
-                  </>
-                )}
-              </View>
-              {/* The address switch on its own quiet line, so the links
-                  above stay short. */}
+              </ScrollView>
+
+              <BrassButton
+                label="Share address"
+                icon="arrowUp"
+                disabled={address == null}
+                onPress={() => {
+                  if (address != null) {
+                    Share.share({
+                      message:
+                        requested == null
+                          ? address
+                          : buildPaymentUri(address, requested),
+                    });
+                  }
+                }}
+              />
               <Pressable
                 accessibilityRole="button"
                 hitSlop={10}
-                onPress={() =>
-                  setMode(mode === 'private' ? 'public' : 'private')
-                }
-                style={styles.switchLink}
+                onPress={onClose}
+                style={styles.done}
               >
-                <Text style={styles.switchLabel}>
-                  {mode === 'private'
-                    ? 'Sender can’t pay shielded? Transparent address ›'
-                    : '‹ Back to your shielded address'}
-                </Text>
+                <Text style={styles.doneText}>Done</Text>
               </Pressable>
-            </ScrollView>
-
-            <BrassButton
-              label="Share address"
-              icon="arrowUp"
-              disabled={address == null}
-              onPress={() => {
-                if (address != null) {
-                  Share.share({
-                    message:
-                      requested == null
-                        ? address
-                        : buildPaymentUri(address, requested),
-                  });
-                }
-              }}
-            />
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={10}
-              onPress={onClose}
-              style={styles.done}
-            >
-              <Text style={styles.doneText}>Done</Text>
-            </Pressable>
-          </>
-        )}
+            </>
+          )}
+        </View>
       </View>
     </Modal>
   );
@@ -429,11 +443,13 @@ function groupedShort(address: string): string {
 const useStyles = makeStyles(colors => ({
   // Sheets reach under the home indicator: the bottom buttons sit higher,
   // clear of the swipe area and easy to reach with a thumb.
+  safe: { flex: 1, backgroundColor: colors.ink },
   container: {
     flex: 1,
     backgroundColor: colors.ink,
-    padding: space.lg,
-    paddingBottom: space.xl + space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.md,
     overflow: 'hidden',
   },
   scroll: { flexGrow: 1, paddingBottom: space.sm },

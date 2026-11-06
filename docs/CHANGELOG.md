@@ -2,6 +2,32 @@
 
 What changed in each version, in plain words. Newest first.
 
+## 0.0.19, build 19 (November 6, 2026)
+- Ready for NU7: Zecky's Zcash engine is updated to the official Zcash core
+  for NU7, so sending and locking in work again.
+- The first time you open this version, Zecky updates its wallet data for
+  the new engine. Your 24 words and your Zcash are unaffected.
+- Receive, Send and Settings open in the lock's own room: the same
+  dark background, a small Zecky lock on top, engraved brass plates.
+- Settings shows the current block of the Zcash network and how fast blocks
+  come. About names the Zcash engine and the current block; the technical
+  details fold away. Network is shorter: the explanation and adding a
+  server fold away until you need them.
+- Send: while the keypad is open the lock steps aside, so the fields stay
+  in view; Check before sending, Sent and Payment saved are in the same
+  style, with the value in your currency under Total sent.
+- Send: tick "Include the network fee in this amount" and the total that
+  leaves the lock is exactly what you typed; the receiver gets it minus
+  the fee.
+- Plain words: Receive and Send (were Lock more and Release), Received
+  and Sent in Activity. The lock stays in the look.
+- The main screen is calmer: just "Up to date" at the bottom, the next
+  milestone as a date (1 week on Nov 12), no "usable in about …
+  minutes" note, and no theme switch (it is under Settings › Display).
+- Each value shows in one place: the server under Network, the current
+  block on the Settings menu, the version under About.
+  Send still shows what can be used now, and when the rest will be.
+
 ## 0.0.19, build 18 (November 5, 2026)
 - Zcash network upgrade NU7: until Zecky's Zcash engine is updated for it,
   releasing and locking in are paused with a clear message. Your Zcash is

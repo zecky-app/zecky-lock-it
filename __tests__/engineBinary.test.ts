@@ -1,16 +1,19 @@
-// Self-audit D1 (27 Oct 2026): the Zcash engine (libzcashlc, which derives
-// keys and signs) arrives prebuilt inside react-native-zcash. These are the
-// checksums of the binaries checked byte for byte against the Zcash team's
-// own release: zcash-swift-wallet-sdk 2.7.0-rc.4, libzcashlc.xcframework.zip
-// (sha256 c012c2b682191f027c1874ecde84adeeaef26dbb3e827dd5f29deb0eb8af0ef2,
-// as declared in that release's Package.swift). See docs/ENGINE.md.
+// Self-audit D1: the Zcash engine (libzcashlc, which derives keys, proves and
+// signs) is the Zecky engine release v4.0.0-zecky.2 of zecky-app/zecky-engine:
+// the official zcash-swift-wallet-sdk 4.0.0 FFI on the NU7 releases of
+// librustzcash, built from commit 3a69cb0. scripts/fetch-engine.sh puts it
+// into react-native-zcash after checking these same checksums. See
+// docs/ENGINE.md.
 //
 // When this test fails after an update, do not just change the numbers:
-// check the new binaries against the matching upstream release first.
+// rebuild the engine from its tagged commit and compare first.
 export {};
 
 const fs = jest.requireActual<{
-  readFileSync: (path: string) => Uint8Array;
+  readFileSync: {
+    (path: string): Uint8Array;
+    (path: string, encoding: 'utf8'): string;
+  };
   existsSync: (path: string) => boolean;
 }>('fs');
 const { createHash } = jest.requireActual<{
@@ -20,11 +23,14 @@ const { createHash } = jest.requireActual<{
 }>('crypto');
 
 const ROOT = 'node_modules/react-native-zcash/ios/libzcashlc.xcframework';
+const HEADER = 'node_modules/react-native-zcash/ios/zcashlc.h';
+const HEADER_SHA256 =
+  '1d9cada2baa1c0f3c7f8035422e1feecd9f0bd696ce7b07ea686313d2844a2dc';
 const EXPECTED: Record<string, string> = {
   'ios-arm64/libzcashlc.a':
-    '1bbc8057add6e5bdac863fa380759e582ffcb4a505ba292ddfd97aede929e5ed',
+    '94c9b1feb7c35fb1a13c779fc8b78e236910145005ead405f81ae7c414a0b2cd',
   'ios-arm64_x86_64-simulator/libzcashlc.a':
-    '3ac75d4704fc7bd9564c757e3b92f755c52307e2413993878df7e9bfb7ff9c1c',
+    '91d6a1d685b0b97ad9b036af7e758c685c52b8e9cdac08fef00867bfb0ebc1d1',
 };
 
 test.each(Object.entries(EXPECTED))(
@@ -38,3 +44,25 @@ test.each(Object.entries(EXPECTED))(
     expect(actual).toBe(sha256);
   },
 );
+
+test('engine header zcashlc.h matches the engine release', () => {
+  const actual = createHash('sha256')
+    .update(fs.readFileSync(HEADER))
+    .digest('hex');
+  expect(actual).toBe(HEADER_SHA256);
+});
+
+test('the install step pins the same engine', () => {
+  const script = fs.readFileSync('scripts/fetch-engine.sh', 'utf8');
+  expect(script).toContain('releases/download/v4.0.0-zecky.2');
+  expect(script).toContain(HEADER_SHA256);
+  expect(script).toContain(EXPECTED['ios-arm64/libzcashlc.a']);
+});
+
+test('Settings › About names the same engine release', () => {
+  const about = fs.readFileSync('src/lib/about.ts', 'utf8');
+  const script = fs.readFileSync('scripts/fetch-engine.sh', 'utf8');
+  const release = /ENGINE_RELEASE = '([^']+)'/.exec(about)?.[1];
+  expect(release).toBeDefined();
+  expect(script).toContain(`releases/download/${release}`);
+});

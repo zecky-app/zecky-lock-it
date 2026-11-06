@@ -16,9 +16,9 @@ interface Props {
 }
 
 const TITLES = {
-  received: 'Locked in',
-  sent: 'Released',
-  self: 'Released to yourself',
+  received: 'Received',
+  sent: 'Sent',
+  self: 'Sent to yourself',
   shielded: 'Locked in from transparent',
 };
 
@@ -26,7 +26,7 @@ function status(tx: Transaction): string {
   if (tx.isExpired) return 'Expired. This never left the lock.';
   if (isPending(tx)) {
     return sentEntry(tx.rawTransactionId)?.waiting
-      ? 'Not delivered to the network yet. Zecky sends it out by itself as soon as there is a connection. Do not release it again.'
+      ? 'Not delivered to the network yet. Zecky sends it out by itself as soon as there is a connection. Do not send it again.'
       : 'Waiting for a block…';
   }
   return `Confirmed in block ${tx.minedHeight.toLocaleString('en-US')}`;
@@ -111,7 +111,7 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
           </Field>
         )}
         {date == null && sentAt != null && (
-          <Field label="Released from this phone">
+          <Field label="Sent from this phone">
             <Text style={styles.value}>{sentAt}</Text>
           </Field>
         )}
@@ -130,7 +130,7 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
         )}
         {tx.toAddress != null && tx.toAddress !== '' && (
           <Field
-            label={self ? 'Released to (your own address)' : 'Released to'}
+            label={self ? 'Sent to (your own address)' : 'Sent to'}
           >
             <Text style={styles.mono} selectable>
               {tx.toAddress}

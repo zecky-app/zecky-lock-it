@@ -9,8 +9,8 @@ import { Icon, IconName } from './Icon';
 
 // In the lock's words, as on the Mac.
 const TITLES = {
-  received: 'Locked',
-  sent: 'Released',
+  received: 'Received',
+  sent: 'Sent',
   self: 'To yourself',
   shielded: 'Locked in from transparent',
 };
@@ -32,7 +32,7 @@ function when(tx: Transaction): string {
       minute: '2-digit',
     });
     return `${
-      sent.waiting ? 'Waiting to release' : 'Waiting for a block'
+      sent.waiting ? 'Waiting to send' : 'Waiting for a block'
     } · ${time}`;
   }
   const date = new Date(tx.blockTimeInSeconds * 1000);

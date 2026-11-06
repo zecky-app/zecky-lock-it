@@ -80,7 +80,7 @@ index b8345ef..52bd87a 100644
  RCT_EXTERN_METHOD(supportedEvents)
  
 diff --git a/node_modules/react-native-zcash/ios/RNZcash.swift b/node_modules/react-native-zcash/ios/RNZcash.swift
-index 825c463..65bfcf2 100644
+index 825c463..7eaeaee 100644
 --- a/node_modules/react-native-zcash/ios/RNZcash.swift
 +++ b/node_modules/react-native-zcash/ios/RNZcash.swift
 @@ -1,7 +1,11 @@
@@ -195,7 +195,7 @@ index 825c463..65bfcf2 100644
          let lightwalletd: LightWalletService = LightWalletGRPCService(endpoint: endpoint)
          let height = try await lightwalletd.latestBlockHeight(mode: ServiceMode.direct)
          await lightwalletd.closeConnections()
-@@ -301,23 +357,93 @@ class RNZcash: RCTEventEmitter {
+@@ -301,24 +357,103 @@ class RNZcash: RCTEventEmitter {
            )
  
            var lastTxid = ""  // The last transfer is the most relevant to the user
@@ -232,9 +232,9 @@ index 825c463..65bfcf2 100644
 +            case .notAttempted(let txId):
 +              undelivered.append(txId.toHexStringTxId())
 +              if reason == nil { reason = "not attempted" }
-+            }
-+          }
-+
+             }
+           }
+ 
 +          // Zecky (self-audit N6): over Tor, one exit can fail (for example
 +          // its name lookup), and the engine's own retry only comes minutes
 +          // later. The failed connection is dropped, so trying again now goes
@@ -282,9 +282,9 @@ index 825c463..65bfcf2 100644
 +              }
 +              undelivered = stillUndelivered
 +              if rejected != nil { break }
-             }
-           }
- 
++            }
++          }
++
 +          if !undelivered.isEmpty {
 +            let ids = undelivered.joined(separator: ",")
 +            if let rejected {
@@ -296,9 +296,19 @@ index 825c463..65bfcf2 100644
 +          }
 +
            resolve(lastTxid)
++        } catch let error as ZcashError {
++          // Zecky: pass the engine's own message on. It is redacted by the
++          // engine (no amounts, addresses or txids), and says what failed,
++          // such as an expired recipient address.
++          if case .rustCreateToAddress(let message) = error {
++            reject("createTransfer", "Failed to spend: \(message)", error)
++          } else {
++            reject("createTransfer", "Failed to spend", error)
++          }
          } catch {
            reject("createTransfer", "Failed to spend", error)
-@@ -631,6 +757,214 @@ class RNZcash: RCTEventEmitter {
+         }
+@@ -631,6 +766,214 @@ class RNZcash: RCTEventEmitter {
      }
    }
  
@@ -513,7 +523,7 @@ index 825c463..65bfcf2 100644
    @objc func deriveUnifiedAddress(
      _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
      rejecter reject: @escaping RCTPromiseRejectBlock
-@@ -888,6 +1222,9 @@ class WalletSynchronizer: NSObject {
+@@ -888,6 +1231,9 @@ class WalletSynchronizer: NSObject {
      if tx.fee != nil {
        confTx.fee = String(describing: abs(tx.fee!.amount))
      }
@@ -523,7 +533,7 @@ index 825c463..65bfcf2 100644
      if tx.isSentTransaction {
        let recipients = await self.synchronizer.getRecipients(for: tx)
        if recipients.count > 0 {
-@@ -998,3 +1335,268 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
+@@ -998,3 +1344,268 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
        isDirectory: true
      )
  }

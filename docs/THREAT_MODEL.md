@@ -144,13 +144,25 @@ protects, from whom, how, and what it does not try to do.
   connection. With a public server, a failed Tor submit is retried at once,
   up to twice, through a fresh circuit (the failed group is dropped); a
   rejection by the server is not retried.
-- NU7 (block 3,543,405, Nov 2026): the engine in this build (react-native-
-  zcash 0.13.5, Swift SDK 2.7.0-rc.4) does not know NU7's consensus branch,
-  so from 40 blocks before activation Zecky builds no transaction at all
-  (releases, lock-ins and their proposals refuse with a clear message;
-  `src/lib/upgrades.ts`, ENGINE_KNOWS_NU7). Receiving, syncing and balances
-  are unaffected. Block-time-based logic counts 25-second blocks from NU7
-  (confirmation estimates, the 48-hour key removal, birthday estimates).
+- NU7 (block 3,543,405, Nov 2026): the engine is the Zecky engine
+  v4.0.0-zecky.2 (docs/ENGINE.md), built on the NU7 releases of the
+  official Zcash core, so it builds NU7 transactions (branch ID 0x77190AD9;
+  without an explicit expiry a transaction expires 120 blocks after NU7,
+  the same time as 40 blocks before). `src/lib/upgrades.ts`
+  ENGINE_KNOWS_NU7 is true; the pause from build 18 only applies to an
+  engine that does not know NU7. Block-time-based logic counts 25-second
+  blocks from NU7 (confirmation estimates, the 48-hour key removal,
+  birthday estimates).
+- Engine supply chain (self-audit D1, changed): the engine binary is no
+  longer the one inside react-native-zcash. `scripts/fetch-engine.sh`
+  downloads it from the public zecky-engine release and refuses it unless
+  the zip, header and device binary match pinned SHA-256 checksums; a
+  test pins the same values. Risks: the build is not yet reproducible by a
+  second party (anyone can rebuild from the tagged commit and compare); the
+  connection code (FFI) is maintained by Zecky since the upstream Swift
+  SDK has ended, so it is first in the audit scope and was reviewed
+  independently. Two Keystone crates come from git, pinned to a commit.
+  The first launch migrates the wallet database one way.
 - Own node identity (self-audit N2, re-check R3/R4): only a …ts.net name
   added from Rock it's QR code (saved with an "own" mark) counts as a
   verified own node: it is reached over TLS for a name only the owner's
@@ -172,7 +184,7 @@ flowchart LR
   subgraph Phone["iPhone"]
     K[("Keychain<br/>phrase, Zecky code hash,<br/>security key public keys,<br/>contacts, addresses,<br/>last balance")]
     A["Zecky app"]
-    E["Zcash engine<br/>(SDK, on device)"]
+    E["Zcash engine<br/>(Zecky engine, official Zcash core, on device)"]
     D[("Wallet database<br/>history, notes<br/>not backed up")]
     S[("App settings<br/>server, theme, unit,<br/>send times")]
     A <--> K

@@ -8,8 +8,8 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
-    "postinstall": "patch-package",
-    "setup": "npm ci --ignore-scripts && patch-package",
+    "postinstall": "patch-package && ./scripts/fetch-engine.sh",
+    "setup": "npm ci --ignore-scripts && patch-package && ./scripts/fetch-engine.sh",
     "check:deps": "npm audit signatures && npm audit --omit=dev --audit-level=critical"
   },
   "dependencies": {

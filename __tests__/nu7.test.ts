@@ -18,12 +18,16 @@ test('blocks take 75 seconds before NU7 and 25 seconds after', () => {
   expect(blockSeconds(NU7_HEIGHT)).toBe(25);
 });
 
-test('while the engine does not know NU7, building pauses just before it', () => {
-  expect(ENGINE_KNOWS_NU7).toBe(false);
+test('the engine knows NU7, so building never pauses for it', () => {
+  expect(ENGINE_KNOWS_NU7).toBe(true);
   expect(nu7Pauses(0)).toBe(false);
-  expect(nu7Pauses(NU7_HEIGHT - NU7_MARGIN_BLOCKS - 1)).toBe(false);
-  expect(nu7Pauses(NU7_HEIGHT - NU7_MARGIN_BLOCKS)).toBe(true);
-  expect(nu7Pauses(NU7_HEIGHT + 1000)).toBe(true);
+  expect(nu7Pauses(NU7_HEIGHT - NU7_MARGIN_BLOCKS)).toBe(false);
+  expect(nu7Pauses(NU7_HEIGHT)).toBe(false);
+  expect(nu7Pauses(NU7_HEIGHT + 1000)).toBe(false);
+});
+
+test('the margin before NU7 is still the 40 blocks an old engine would need', () => {
+  expect(NU7_MARGIN_BLOCKS).toBe(40);
 });
 
 test('the 48-hour removal counts 48 hours of blocks on both sides of NU7', () => {
