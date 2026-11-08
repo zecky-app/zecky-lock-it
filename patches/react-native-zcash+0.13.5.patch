@@ -1,8 +1,22 @@
 diff --git a/node_modules/react-native-zcash/ios/RNZcash.m b/node_modules/react-native-zcash/ios/RNZcash.m
-index b8345ef..52bd87a 100644
+index b8345ef..1ea9bf1 100644
 --- a/node_modules/react-native-zcash/ios/RNZcash.m
 +++ b/node_modules/react-native-zcash/ios/RNZcash.m
-@@ -77,6 +77,47 @@ resolver:(RCTPromiseResolveBlock)resolve
+@@ -31,6 +31,13 @@ resolver:(RCTPromiseResolveBlock)resolve
+ rejecter:(RCTPromiseRejectBlock)reject
+ )
+ 
++RCT_EXTERN_METHOD(proposeSendMax:(NSString *)alias
++:(NSString *)toAddress
++:(NSString *)memo
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
+ RCT_EXTERN_METHOD(proposeTransfer:(NSString *)alias
+ :(NSString *)zatoshi
+ :(NSString *)toAddress
+@@ -77,6 +84,66 @@ resolver:(RCTPromiseResolveBlock)resolve
  rejecter:(RCTPromiseRejectBlock)reject
  )
  
@@ -37,6 +51,25 @@ index b8345ef..52bd87a 100644
 +rejecter:(RCTPromiseRejectBlock)reject
 +)
 +
++RCT_EXTERN_METHOD(setTorAtStart:(BOOL)enabled
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(setRestoreAtStart:(BOOL)enabled
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(getScanOverview:(NSString *)alias
++resolver:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
++RCT_EXTERN_METHOD(engineKnowsNu7:(RCTPromiseResolveBlock)resolve
++rejecter:(RCTPromiseRejectBlock)reject
++)
++
 +RCT_EXTERN_METHOD(canReachLocal:(RCTPromiseResolveBlock)resolve
 +rejecter:(RCTPromiseRejectBlock)reject
 +)
@@ -50,7 +83,7 @@ index b8345ef..52bd87a 100644
  RCT_EXTERN_METHOD(deriveUnifiedAddress:(NSString *)alias
  resolver:(RCTPromiseResolveBlock)resolve
  rejecter:(RCTPromiseRejectBlock)reject
-@@ -98,6 +139,28 @@ RCT_EXTERN_METHOD(ironwoodActivationHeight:(NSString *)networkName
+@@ -98,6 +165,28 @@ RCT_EXTERN_METHOD(ironwoodActivationHeight:(NSString *)networkName
    rejecter:(RCTPromiseRejectBlock)reject
  )
  
@@ -80,7 +113,7 @@ index b8345ef..52bd87a 100644
  RCT_EXTERN_METHOD(supportedEvents)
  
 diff --git a/node_modules/react-native-zcash/ios/RNZcash.swift b/node_modules/react-native-zcash/ios/RNZcash.swift
-index 825c463..7eaeaee 100644
+index 825c463..3902566 100644
 --- a/node_modules/react-native-zcash/ios/RNZcash.swift
 +++ b/node_modules/react-native-zcash/ios/RNZcash.swift
 @@ -1,7 +1,11 @@
@@ -142,23 +175,72 @@ index 825c463..7eaeaee 100644
  struct ConfirmedTx {
    var minedHeight: Int
    var toAddress: String?
-@@ -34,6 +78,7 @@ struct ConfirmedTx {
+@@ -33,7 +77,10 @@ struct ConfirmedTx {
+   var fee: String?
    var isShielding: Bool
    var isExpired: Bool
++  // Zecky: the engine's own sign of the balance change (value is sent unsigned).
++  var isSent: Bool = false
    var memos: [String]?
 +  var expiryHeight: Int? = nil
    var dictionary: [String: Any?] {
      return [
        "minedHeight": minedHeight,
-@@ -46,6 +91,7 @@ struct ConfirmedTx {
+@@ -45,7 +92,9 @@ struct ConfirmedTx {
+       "fee": fee,
        "memos": memos ?? [],
        "isShielding": isShielding,
++      "isSent": isSent,
        "isExpired": isExpired,
 +      "expiryHeight": expiryHeight,
      ]
    }
    var nsDictionary: NSDictionary {
-@@ -96,7 +142,7 @@ class RNZcash: RCTEventEmitter {
+@@ -74,6 +123,43 @@ let genericError = NSError(domain: "", code: 0)
+ class RNZcash: RCTEventEmitter {
+   var hasListeners: Bool = false
+ 
++  /// Zecky (audit C-25): whether the next initialize brings Tor up before
++  /// its first sync pass. Set by the app right before it starts the wallet.
++  static var torAtStart = false
++
++  /// Zecky (audit C-49): the next initialize restores from the phrase
++  /// (the SDK's .restoreWallet), so it can tell recovery from ordinary sync.
++  static var restoreAtStart = false
++
++  @objc func setRestoreAtStart(
++    _ enabled: Bool,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    RNZcash.restoreAtStart = enabled
++    resolve(nil)
++  }
++
++  /// Zecky (audit C-42): asks the engine that is actually linked into the
++  /// app whether it builds NU7 transactions, rather than trusting a constant.
++  @objc func engineKnowsNu7(
++    _ resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    let before = zcashlc_branch_id_for_height(3_543_404, 1)
++    let after = zcashlc_branch_id_for_height(3_543_405, 1)
++    resolve(after == 0x7719_0AD9 && before != after)
++  }
++
++  @objc func setTorAtStart(
++    _ enabled: Bool,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    RNZcash.torAtStart = enabled
++    resolve(nil)
++  }
++
+   override static func requiresMainQueueSetup() -> Bool {
+     return true
+   }
+@@ -96,7 +182,7 @@ class RNZcash: RCTEventEmitter {
    ) {
      Task {
        let network = getNetworkParams(networkName)
@@ -167,26 +249,134 @@ index 825c463..7eaeaee 100644
        let initializer = Initializer(
          cacheDbURL: try! cacheDbURLHelper(alias, network),
          fsBlockDbRoot: try! fsBlockDbRootURLHelper(alias, network),
-@@ -128,8 +174,18 @@ class RNZcash: RCTEventEmitter {
+@@ -105,10 +191,21 @@ class RNZcash: RCTEventEmitter {
+         torDirURL: try! torDirURLHelper(alias, network),
+         endpoint: endpoint,
+         network: network,
++        // Zecky (audit C-24): the Sapling parameters ship inside the app, so
++        // nothing is downloaded from download.z.cash (with or without Tor).
++        // The SDK keeps its own copy in the wallet folder (it renames these
++        // paths with the alias, so they cannot point into the read-only app
++        // bundle) and fills it from the bundle below, a local file copy. It
++        // checks their SHA-1 before every use.
+         spendParamsURL: try! spendParamsURLHelper(alias),
+         outputParamsURL: try! outputParamsURLHelper(alias),
+-        saplingParamsSourceURL: SaplingParamsSourceURL.default,
++        saplingParamsSourceURL: bundledSaplingParams().map {
++          SaplingParamsSourceURL(spendParamFileURL: $0.spend, outputParamFileURL: $0.output)
++        } ?? SaplingParamsSourceURL.default,
+         alias: ZcashSynchronizerAlias.custom(alias),
++        // Zecky (audit C-11): no SDK or engine logging in the system log.
++        // At debug level it carried txids and unredacted engine errors.
++        loggingPolicy: .noLogging,
+         isTorEnabled: false,
+         isExchangeRateEnabled: false
+       )
+@@ -116,20 +213,61 @@ class RNZcash: RCTEventEmitter {
+         do {
+           let wallet = try WalletSynchronizer(
+             alias: alias, initializer: initializer, emitter: sendToJs)
+-          let seedBytes = try Mnemonic.deterministicSeedBytes(from: seed)
+-          let initMode = newWallet ? WalletInitMode.newWallet : WalletInitMode.existingWallet
+-          let ufvk = try deriveUnifiedViewingKey(seed, network)
++          // Zecky (self-audit K1): an existing wallet starts from its viewing
++          // key ("uview…"), so the recovery phrase is not read at every start.
++          // The phrase is only passed right after creating or restoring, or
++          // when the engine asks for it once (SeedRequired) for a migration.
++          let viewingOnly = seed.hasPrefix("uview")
++          let seedBytes: [UInt8]?
++          let ufvkString: String
++          if viewingOnly {
++            seedBytes = nil
++            ufvkString = seed
++          } else {
++            seedBytes = try Mnemonic.deterministicSeedBytes(from: seed)
++            ufvkString = try deriveUnifiedViewingKey(seed, network).stringEncoded
++          }
++          let initMode = newWallet
++            ? WalletInitMode.newWallet
++            : (RNZcash.restoreAtStart ? WalletInitMode.restoreWallet : WalletInitMode.existingWallet)
++          RNZcash.restoreAtStart = false
+ 
+-          _ = try await wallet.synchronizer.prepare(
++          let prepared = try await wallet.synchronizer.prepare(
+             with: seedBytes,
+             walletBirthday: birthdayHeight,
+-            for: initMode,
++            for: viewingOnly ? .existingWallet : initMode,
+             name: alias,
              keySource: nil
            )
-           try await wallet.synchronizer.start()
-+          // Zecky addition: keep the wallet database out of iCloud and
-+          // computer backups.
-+          excludeFromBackup(walletFileURLs(alias, network))
-           let accounts = try await wallet.synchronizer.listAccounts()
-           let accountUUID = accounts.first(where: { $0.ufvk == ufvk })?.id
+-          try await wallet.synchronizer.start()
++          if case .seedRequired = prepared {
++            wallet.synchronizer.stop()
++            reject("SeedRequired", "The engine needs the recovery phrase once", genericError)
++            return
++          }
 +          // Zecky addition: the database on this device belongs to a
-+          // different recovery phrase. Refuse rather than show its history.
++          // different recovery phrase. Refuse rather than show its history,
++          // before anything is synced (audit C-45).
+           let accounts = try await wallet.synchronizer.listAccounts()
+-          let accountUUID = accounts.first(where: { $0.ufvk == ufvk })?.id
++          let accountUUID = accounts.first(where: {
++            $0.ufvk?.stringEncoded == ufvkString
++          })?.id
 +          guard accountUUID != nil else {
 +            wallet.synchronizer.stop()
 +            reject("WalletMismatch", "Wallet data belongs to another wallet", genericError)
 +            return
 +          }
++          // Zecky (audit C-25): with Tor wanted, Tor is up before the first
++          // sync pass, so lookups and the resend of an unmined payment never
++          // go out directly first. If Tor cannot start, the wallet still
++          // syncs; the app reports Tor as failed and refuses to send.
++          if RNZcash.torAtStart {
++            try? await wallet.synchronizer.tor(enabled: true)
++          }
++          try await wallet.synchronizer.start()
++          // Zecky addition: keep the wallet database out of iCloud and
++          // computer backups.
++          excludeFromBackup(walletFileURLs(alias, network))
++          protectWalletFiles(walletFileURLs(alias, network))
            wallet.accountUUID = accountUUID
            wallet.subscribe()
            await synchronizerStore.set(wallet, for: alias)
-@@ -185,7 +241,7 @@ class RNZcash: RCTEventEmitter {
+@@ -160,6 +298,34 @@ class RNZcash: RCTEventEmitter {
+     }
+   }
+ 
++  /// Zecky addition: the scan state for Lock it's sync details page
++  /// (read-only; nothing is sent anywhere).
++  @objc func getScanOverview(
++    _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      guard let wallet = await synchronizerStore.get(alias) else {
++        reject("getScanOverviewError", "Wallet does not exist", genericError)
++        return
++      }
++      do {
++        let o = try await wallet.synchronizer.scanOverview()
++        let ranges: [[Int]] = o.toScan.prefix(500).map {
++          [Int($0.first), Int($0.end), Int($0.priority)]
++        }
++        let data: NSDictionary = [
++          "fullyScanned": o.fullyScanned.map { Int($0) } ?? NSNull(),
++          "maxScanned": o.maxScanned.map { Int($0) } ?? NSNull(),
++          "toScan": ranges,
++        ]
++        resolve(data)
++      } catch {
++        reject("getScanOverviewError", "Could not read the scan state", error)
++      }
++    }
++  }
++
+   @objc func getLatestNetworkHeight(
+     _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
+     rejecter reject: @escaping RCTPromiseRejectBlock
+@@ -185,7 +351,7 @@ class RNZcash: RCTEventEmitter {
    ) {
      Task {
        do {
@@ -195,7 +385,81 @@ index 825c463..7eaeaee 100644
          let lightwalletd: LightWalletService = LightWalletGRPCService(endpoint: endpoint)
          let height = try await lightwalletd.latestBlockHeight(mode: ServiceMode.direct)
          await lightwalletd.closeConnections()
-@@ -301,24 +357,103 @@ class RNZcash: RCTEventEmitter {
+@@ -196,6 +362,49 @@ class RNZcash: RCTEventEmitter {
+     }
+   }
+ 
++  /// Zecky (audit C-15): the engine's own send-max proposal. Resolves like
++  /// proposeTransfer, plus the ZIP 321 request the engine built, so the app
++  /// shows exactly the amount the engine sends.
++  @objc func proposeSendMax(
++    _ alias: String, _ toAddress: String, _ memo: String,
++    resolver resolve: @escaping RCTPromiseResolveBlock,
++    rejecter reject: @escaping RCTPromiseRejectBlock
++  ) {
++    Task {
++      guard let wallet = await synchronizerStore.get(alias) else {
++        reject("proposeSendMax", "Wallet does not exist", genericError)
++        return
++      }
++      do {
++        guard let accountUUID = wallet.accountUUID else {
++          reject("proposeSendMax", "Account UUID not found", genericError)
++          return
++        }
++        let sdkMemo: Memo? = memo.isEmpty ? nil : try Memo(string: memo)
++        let proposal = try await wallet.synchronizer.proposeSendMax(
++          accountUUID: accountUUID,
++          recipient: Recipient(toAddress, network: wallet.synchronizer.network.networkType),
++          memo: sdkMemo
++        )
++        let out: NSMutableDictionary = [
++          "proposalBase64": try proposal.inner.serializedData().base64EncodedString(),
++          "transactionCount": proposal.transactionCount(),
++          "totalFee": String(proposal.totalFeeRequired().amount),
++          "transactionRequest": proposal.inner.steps.first?.transactionRequest ?? "",
++        ]
++        resolve(out)
++      } catch let error as ZcashError {
++        if case .rustCreateToAddress(let message) = error {
++          reject("proposeSendMax", message, error)
++        } else {
++          reject("proposeSendMax", "Failed to propose: \(error.code.rawValue) \(error.message)", error)
++        }
++      } catch {
++        reject("proposeSendMax", "Failed to propose: \(error.localizedDescription)", error)
++      }
++    }
++  }
++
+   @objc func proposeTransfer(
+     _ alias: String, _ zatoshi: String, _ toAddress: String, _ memo: String,
+     resolver resolve: @escaping RCTPromiseResolveBlock,
+@@ -240,6 +449,10 @@ class RNZcash: RCTEventEmitter {
+           } else {
+             reject("proposeTransferError", "Failed to propose transfer", error)
+           }
++        } catch {
++          // Zecky (audit C-44): any other error must still settle the
++          // promise, or the send screen waits forever.
++          reject("proposeTransferError", "Failed to propose transfer", error)
+         }
+       } else {
+         reject("ProposeTransferError", "Wallet does not exist", genericError)
+@@ -292,7 +505,11 @@ class RNZcash: RCTEventEmitter {
+       if let wallet = await synchronizerStore.get(alias) {
+         do {
+           let spendingKey = try deriveUnifiedSpendingKey(seed, wallet.synchronizer.network)
+-          let data = Data.init(base64Encoded: proposalBase64)!
++          // Zecky (audit C-44): refuse, never crash, on a bad proposal.
++          guard let data = Data(base64Encoded: proposalBase64) else {
++            reject("createTransfer", "The payment proposal is invalid", genericError)
++            return
++          }
+           let ffiProposal = try FfiProposal(serializedData: data)
+           let proposal = Proposal(inner: ffiProposal)
+ 
+@@ -301,26 +518,106 @@ class RNZcash: RCTEventEmitter {
            )
  
            var lastTxid = ""  // The last transfer is the most relevant to the user
@@ -303,12 +567,33 @@ index 825c463..7eaeaee 100644
 +          if case .rustCreateToAddress(let message) = error {
 +            reject("createTransfer", "Failed to spend: \(message)", error)
 +          } else {
-+            reject("createTransfer", "Failed to spend", error)
++            // Zecky: name the SDK's own error, so a failure can be traced.
++            reject("createTransfer", "Failed to spend: \(error.code.rawValue) \(error.message)", error)
 +          }
          } catch {
-           reject("createTransfer", "Failed to spend", error)
+-          reject("createTransfer", "Failed to spend", error)
++          reject("createTransfer", "Failed to spend: \(error.localizedDescription)", error)
          }
-@@ -631,6 +766,214 @@ class RNZcash: RCTEventEmitter {
+       } else {
+         reject("createTransfer", "Wallet does not exist", genericError)
+@@ -391,8 +688,15 @@ class RNZcash: RCTEventEmitter {
+               userInfo: [NSLocalizedDescriptionKey: "No result returned"]
+             )
+           }
++        } catch let error as ZcashError {
++          // Zecky (audit C-44): pass the engine's own reason on, as for sends.
++          if case .rustShieldFunds(let message) = error {
++            reject("shieldFunds", "Failed to shield funds: \(message)", error)
++          } else {
++            reject("shieldFunds", "Failed to shield funds: \(error.code.rawValue) \(error.message)", error)
++          }
+         } catch {
+-          reject("shieldFunds", "Failed to shield funds", genericError)
++          reject("shieldFunds", "Failed to shield funds: \(error.localizedDescription)", error)
+         }
+       } else {
+         reject("shieldFunds", "Wallet does not exist", genericError)
+@@ -631,6 +935,221 @@ class RNZcash: RCTEventEmitter {
      }
    }
  
@@ -488,12 +773,19 @@ index 825c463..7eaeaee 100644
 +  }
 +
 +  /// Zecky addition: true when iOS reports a network path, false when it
-+  /// reports none, and true while it has not reported yet.
++  /// reports none, and false while it has not reported yet (audit C-44).
 +  @objc func isOnline(
 +    _ resolve: @escaping RCTPromiseResolveBlock,
 +    rejecter reject: @escaping RCTPromiseRejectBlock
 +  ) {
-+    resolve(NetworkWatch.shared.online ?? true)
++    // Zecky (audit C-44): null until iOS has reported. Sending then treats
++    // the phone as offline; the screen waits for the answer instead of
++    // showing "No internet connection".
++    if let online = NetworkWatch.shared.online {
++      resolve(online)
++    } else {
++      resolve(NSNull())
++    }
 +  }
 +
 +  /// Zecky addition: whether the phone is on Wi-Fi or a cable. true while
@@ -523,7 +815,14 @@ index 825c463..7eaeaee 100644
    @objc func deriveUnifiedAddress(
      _ alias: String, resolver resolve: @escaping RCTPromiseResolveBlock,
      rejecter reject: @escaping RCTPromiseRejectBlock
-@@ -888,6 +1231,9 @@ class WalletSynchronizer: NSObject {
+@@ -882,12 +1401,16 @@ class WalletSynchronizer: NSObject {
+       isShielding: tx.isShielding,
+       isExpired: tx.isExpiredUmined ?? false
+     )
++    confTx.isSent = tx.isSentTransaction
+     if tx.raw != nil {
+       confTx.raw = tx.raw!.hexEncodedString()
+     }
      if tx.fee != nil {
        confTx.fee = String(describing: abs(tx.fee!.amount))
      }
@@ -533,7 +832,7 @@ index 825c463..7eaeaee 100644
      if tx.isSentTransaction {
        let recipients = await self.synchronizer.getRecipients(for: tx)
        if recipients.count > 0 {
-@@ -998,3 +1344,268 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
+@@ -998,3 +1521,293 @@ func generalStorageURLHelper(_ alias: String, _ network: ZcashNetwork) throws ->
        isDirectory: true
      )
  }
@@ -569,6 +868,31 @@ index 825c463..7eaeaee 100644
 +}
 +
 +/// Zecky addition: marks existing files and folders as not to be backed up.
++/// Zecky (audit C-33): the wallet files get the "complete unless open"
++/// protection class, so files that are not open cannot be read while the
++/// iPhone is locked; the open database keeps working until Zecky closes it.
++/// Zecky (audit C-24): the two Sapling parameter files in the app bundle,
++/// when this build includes them.
++func bundledSaplingParams() -> (spend: URL, output: URL)? {
++  guard
++    let spend = Bundle.main.url(forResource: "sapling-spend", withExtension: "params"),
++    let output = Bundle.main.url(forResource: "sapling-output", withExtension: "params")
++  else { return nil }
++  return (spend, output)
++}
++
++func protectWalletFiles(_ urls: [URL]) {
++  let attributes: [FileAttributeKey: Any] = [
++    .protectionKey: FileProtectionType.completeUnlessOpen,
++  ]
++  if let documents = try? documentsDirectoryHelper() {
++    try? FileManager.default.setAttributes(attributes, ofItemAtPath: documents.path)
++  }
++  for url in urls where FileManager.default.fileExists(atPath: url.path) {
++    try? FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
++  }
++}
++
 +func excludeFromBackup(_ urls: [URL]) {
 +  for url in urls where FileManager.default.fileExists(atPath: url.path) {
 +    var target = url
@@ -587,7 +911,7 @@ index 825c463..7eaeaee 100644
 +  // such as "10.0.0.1.example.com" is a normal internet host and keeps TLS.
 +  let groups = host.split(separator: ".", omittingEmptySubsequences: false)
 +  guard groups.count == 4,
-+        groups.allSatisfy({ !$0.isEmpty && $0.count <= 3 && $0.allSatisfy({ $0.isASCII && $0.isNumber }) })
++        groups.allSatisfy({ !$0.isEmpty && $0.count <= 3 && ($0.count == 1 || $0.first != "0") && $0.allSatisfy({ $0.isASCII && $0.isNumber }) })
 +  else { return false }
 +  let parts = groups.compactMap { Int($0) }
 +  guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
@@ -802,3 +1126,188 @@ index 825c463..7eaeaee 100644
 +    }
 +  }
 +}
+diff --git a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackend.swift b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackend.swift
+index 8a5a68a..241f708 100644
+--- a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackend.swift
++++ b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackend.swift
+@@ -314,6 +314,32 @@ struct ZcashRustBackend: ZcashRustBackendWelding {
+         ))
+     }
+ 
++    @DBActor
++    func proposeSendMax(accountUUID: AccountUUID, to address: String, memo: MemoBytes?) async throws -> FfiProposal {
++        let proposal = zcashlc_propose_send_max_transfer(
++            dbData.0,
++            dbData.1,
++            networkType.networkId,
++            accountUUID.id,
++            [CChar](address.utf8CString),
++            memo?.bytes,
++            MaxSpendable,
++            confirmationsPolicy.toBackend(),
++            false
++        )
++
++        guard let proposal else {
++            throw ZcashError.rustCreateToAddress(lastErrorMessage(fallback: "`proposeSendMax` failed with unknown error"))
++        }
++
++        defer { zcashlc_free_boxed_slice(proposal) }
++
++        return try FfiProposal(serializedData: Data(
++            bytes: proposal.pointee.ptr,
++            count: Int(proposal.pointee.len)
++        ))
++    }
++
+     @DBActor
+     func proposeOrchardToIronwoodMigration(accountUUID: AccountUUID) async throws -> FfiProposal {
+         let dbDataPtr = dbData.0
+@@ -1340,7 +1366,9 @@ struct ZcashRustBackend: ZcashRustBackendWelding {
+             transactionStatus.mined = UInt32(height)
+         }
+ 
+-        zcashlc_set_transaction_status(
++        // Zecky (audit C-13): the 4.0.0 engine returns false on failure; the
++        // 2.7 Swift layer ignored it, so a failed status write was silent.
++        let stored = zcashlc_set_transaction_status(
+             dbData.0,
+             dbData.1,
+             networkType.networkId,
+@@ -1348,6 +1376,11 @@ struct ZcashRustBackend: ZcashRustBackendWelding {
+             UInt(txId.bytes.count),
+             transactionStatus
+         )
++        guard stored else {
++            throw ZcashError.rustTransactionDataRequests(
++                lastErrorMessage(fallback: "`setTransactionStatus` failed with unknown error")
++            )
++        }
+     }
+     
+     @DBActor
+diff --git a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackendWelding.swift b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackendWelding.swift
+index fe60f65..34c983a 100644
+--- a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackendWelding.swift
++++ b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Rust/ZcashRustBackendWelding.swift
+@@ -272,6 +272,10 @@ protocol ZcashRustBackendWelding {
+     /// - Throws: `rustCreateToAddress`.
+     func proposeOrchardToIronwoodMigration(accountUUID: AccountUUID) async throws -> FfiProposal
+ 
++    /// Zecky (audit C-15): the engine's own "send everything spendable" proposal, so
++    /// the fee is worked out once by librustzcash instead of by trial in the app.
++    func proposeSendMax(accountUUID: AccountUUID, to address: String, memo: MemoBytes?) async throws -> FfiProposal
++
+     /// Select transaction inputs, compute fees, and construct a proposal for a transaction
+     /// that can then be authorized and made ready for submission to the network with
+     /// `createProposedTransaction` from a valid [ZIP-321](https://zips.z.cash/zip-0321) Payment Request UR
+diff --git a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Synchronizer/SDKSynchronizer.swift b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Synchronizer/SDKSynchronizer.swift
+index 0cce8d8..d1a48bc 100644
+--- a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Synchronizer/SDKSynchronizer.swift
++++ b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Synchronizer/SDKSynchronizer.swift
+@@ -423,6 +423,22 @@ public class SDKSynchronizer: Synchronizer {
+         return proposal
+     }
+ 
++    /// Zecky (audit C-15): everything spendable to one recipient, fee included,
++    /// as the engine works it out.
++    public func proposeSendMax(accountUUID: AccountUUID, recipient: Recipient, memo: Memo?) async throws -> Proposal {
++        try throwIfUnprepared()
++
++        if case Recipient.transparent = recipient, memo != nil {
++            throw ZcashError.synchronizerSendMemoToTransparentAddress
++        }
++
++        return try await transactionEncoder.proposeSendMax(
++            accountUUID: accountUUID,
++            recipient: recipient.stringEncoded,
++            memoBytes: memo?.asMemoBytes()
++        )
++    }
++
+     public func proposeOrchardToIronwoodMigration(accountUUID: AccountUUID) async throws -> Proposal {
+         try throwIfUnprepared()
+ 
+@@ -618,6 +634,26 @@ public class SDKSynchronizer: Synchronizer {
+         return try await blockProcessor.refreshUTXOs(tAddress: address, startHeight: height)
+     }
+ 
++    /// Zecky addition: a read-only view of the wallet's scan state, for the
++    /// app's sync details page. Ranges are the parts still to scan, as
++    /// [first, last) block heights with the engine's priority.
++    public func scanOverview() async throws -> (
++        fullyScanned: BlockHeight?,
++        maxScanned: BlockHeight?,
++        toScan: [(first: BlockHeight, end: BlockHeight, priority: UInt8)]
++    ) {
++        try throwIfUnprepared()
++        let backend = initializer.rustBackend
++        let ranges = try await backend.suggestScanRanges()
++            .filter { $0.priority != .scanned && $0.priority != .ignored }
++            .map { (first: $0.range.lowerBound, end: $0.range.upperBound, priority: $0.priority.rawValue) }
++        return (
++            fullyScanned: try await backend.fullyScannedHeight(),
++            maxScanned: try await backend.maxScannedHeight(),
++            toScan: ranges
++        )
++    }
++
+     public func getAccountsBalances() async throws -> [AccountUUID: AccountBalance] {
+         try await initializer.rustBackend.getWalletSummary()?.accountBalances ?? [:]
+     }
+diff --git a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/TransactionEncoder.swift b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/TransactionEncoder.swift
+index b2dcf9e..b768b70 100644
+--- a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/TransactionEncoder.swift
++++ b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/TransactionEncoder.swift
+@@ -38,6 +38,9 @@ protocol TransactionEncoder {
+     /// Proposes migrating the account's entire Orchard balance into the Ironwood pool.
+     func proposeOrchardToIronwoodMigration(accountUUID: AccountUUID) async throws -> Proposal
+ 
++    /// Zecky (audit C-15): the engine's own send-max proposal.
++    func proposeSendMax(accountUUID: AccountUUID, recipient: String, memoBytes: MemoBytes?) async throws -> Proposal
++
+     /// Creates a proposal for shielding any transparent funds received by the given account.
+     ///
+     /// - Parameter accountUUID:the account from which to shield funds.
+diff --git a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/WalletTransactionEncoder.swift b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/WalletTransactionEncoder.swift
+index cf0530e..1d09f42 100644
+--- a/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/WalletTransactionEncoder.swift
++++ b/node_modules/react-native-zcash/ios/ZCashLightClientKit/Transaction/WalletTransactionEncoder.swift
+@@ -77,6 +77,11 @@ class WalletTransactionEncoder: TransactionEncoder {
+         return Proposal(inner: proposal)
+     }
+ 
++    func proposeSendMax(accountUUID: AccountUUID, recipient: String, memoBytes: MemoBytes?) async throws -> Proposal {
++        let proposal = try await rustBackend.proposeSendMax(accountUUID: accountUUID, to: recipient, memo: memoBytes)
++        return Proposal(inner: proposal)
++    }
++
+     func proposeOrchardToIronwoodMigration(accountUUID: AccountUUID) async throws -> Proposal {
+         let proposal = try await rustBackend.proposeOrchardToIronwoodMigration(accountUUID: accountUUID)
+ 
+diff --git a/node_modules/react-native-zcash/lib/src/types.d.ts b/node_modules/react-native-zcash/lib/src/types.d.ts
+index 2e1c76a..866d0de 100644
+--- a/node_modules/react-native-zcash/lib/src/types.d.ts
++++ b/node_modules/react-native-zcash/lib/src/types.d.ts
+@@ -86,6 +86,8 @@ export interface Transaction {
+     fee?: string;
+     toAddress?: string;
+     isShielding: boolean;
++    /** Zecky: true when this transaction lowered the wallet's balance (the engine's own sign). */
++    isSent?: boolean;
+     isExpired: boolean;
+     memos: string[];
+ }
+diff --git a/node_modules/react-native-zcash/src/types.ts b/node_modules/react-native-zcash/src/types.ts
+index c3fa0a4..17710dd 100644
+--- a/node_modules/react-native-zcash/src/types.ts
++++ b/node_modules/react-native-zcash/src/types.ts
+@@ -106,6 +106,8 @@ export interface Transaction {
+   fee?: string
+   toAddress?: string
+   isShielding: boolean
++  /** Zecky: true when this transaction lowered the wallet's balance (the engine's own sign). */
++  isSent?: boolean
+   isExpired: boolean
+   memos: string[]
+ }

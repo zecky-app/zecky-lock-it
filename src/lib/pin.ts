@@ -55,11 +55,29 @@ export function usePinEnabled(): boolean {
 
 export async function setPin(pin: string): Promise<void> {
   const salt = bytesToHex(secureEntropy(16));
-  const result = await Keychain.setGenericPassword(salt, hashPin(pin, salt), {
-    service: SERVICE,
-    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-  });
-  if (result === false) throw new Error('Could not save the code');
+  let result: unknown;
+  try {
+    result = await Keychain.setGenericPassword(salt, hashPin(pin, salt), {
+      service: SERVICE,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch {
+    result = false;
+  }
+  if (result === false) {
+    // The Keychain library removes the old item before writing the new
+    // one (audit C-06): say what is set now, rather than keeping a code
+    // that may no longer exist.
+    const stillSet = await Keychain.hasGenericPassword({ service: SERVICE })
+      .then(has => has === true)
+      .catch(() => false);
+    setEnabled(stillSet);
+    throw new Error(
+      stillSet
+        ? 'The new code could not be saved. Your old code still applies.'
+        : 'The code could not be saved, and no Zecky code is set now. Set one again.',
+    );
+  }
   clearFailures();
   setEnabled(true);
 }
@@ -73,7 +91,9 @@ export async function clearPin(): Promise<void> {
 /** How long the keypad stays blocked after `failures` wrong codes in a row. */
 export function lockoutSeconds(failures: number): number {
   if (failures < FREE_ATTEMPTS) return 0;
-  return Math.min(30 * 2 ** (failures - FREE_ATTEMPTS), 15 * 60);
+  // Audit C-46: up to an hour per further miss (it was 15 minutes), so
+  // trying every 4-digit code takes years, not months.
+  return Math.min(30 * 2 ** (failures - FREE_ATTEMPTS), 60 * 60);
 }
 
 // --- Wrong-code counting ---
@@ -144,19 +164,29 @@ export function secondsUntilRetry(): number {
  * Checks a code. Wrong codes are counted across app restarts; after a few
  * misses each further miss blocks the keypad for a growing time.
  */
+let checking = false;
+
 export async function verifyPin(pin: string): Promise<boolean> {
-  if (secondsUntilRetry() > 0) return false;
-  const entry = await Keychain.getGenericPassword({ service: SERVICE });
-  // Self-audit F2: no stored code means nothing can match. Fail closed;
-  // callers only ask for a code while one is set.
-  if (entry === false) return false;
-  if (hashPin(pin, entry.username) === entry.password) {
-    clearFailures();
-    return true;
+  // Audit C-46: one check at a time, so two at once cannot both slip past
+  // the wait, and the attempt is counted before the comparison.
+  if (checking || secondsUntilRetry() > 0) return false;
+  checking = true;
+  try {
+    const entry = await Keychain.getGenericPassword({ service: SERVICE });
+    // Self-audit F2: no stored code means nothing can match. Fail closed;
+    // callers only ask for a code while one is set.
+    if (entry === false) return false;
+    fails += 1;
+    persistState();
+    if (hashPin(pin, entry.username) === entry.password) {
+      clearFailures();
+      return true;
+    }
+    remaining = lockoutSeconds(fails);
+    persistState();
+    startTicker();
+    return false;
+  } finally {
+    checking = false;
   }
-  fails += 1;
-  remaining = lockoutSeconds(fails);
-  persistState();
-  startTicker();
-  return false;
 }

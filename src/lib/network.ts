@@ -5,16 +5,23 @@ import type { Server } from './server';
 
 // Whether the phone has any network connection, as iOS itself reports it
 // (added to the Zcash library by patches/react-native-zcash+*.patch). This
-// sends nothing anywhere. When the check is missing or fails, assume online
-// and let the wallet's own errors speak.
-export async function isOnline(): Promise<boolean> {
+// sends nothing anywhere. null: iOS has not reported yet (the first moment
+// after a start). When the check is missing or fails, assume online and let
+// the wallet's own errors speak.
+export async function onlineState(): Promise<boolean | null> {
   const native = NativeModules.RNZcash;
   if (typeof native?.isOnline !== 'function') return true;
   try {
-    return (await native.isOnline()) !== false;
+    const v = await native.isOnline();
+    return v === null || v === undefined ? null : v !== false;
   } catch {
     return true;
   }
+}
+
+/** For sending (audit C-44): offline until iOS has reported a connection. */
+export async function isOnline(): Promise<boolean> {
+  return (await onlineState()) === true;
 }
 
 /** Whether the phone is on Wi-Fi or a cable (not only mobile data). */
@@ -106,16 +113,28 @@ export function useNetwork(): NetworkState {
   });
   useEffect(() => {
     let alive = true;
+    let soon: ReturnType<typeof setTimeout> | null = null;
     const check = () => {
       if (AppState.currentState !== 'active') return;
-      Promise.all([isOnline(), onLocalNetwork()]).then(([online, local]) => {
-        if (alive) {
-          setState(prev =>
-            prev.online === online && prev.local === local
-              ? prev
-              : { online, local },
-          );
+      Promise.all([onlineState(), onLocalNetwork()]).then(([known, local]) => {
+        if (!alive) return;
+        // Right after a start iOS has not answered yet: keep what is shown
+        // and ask again in a moment, not only at the next poll.
+        if (known === null) {
+          if (soon == null) {
+            soon = setTimeout(() => {
+              soon = null;
+              check();
+            }, 150);
+          }
+          return;
         }
+        const online = known;
+        setState(prev =>
+          prev.online === online && prev.local === local
+            ? prev
+            : { online, local },
+        );
       });
     };
     check();
@@ -123,6 +142,7 @@ export function useNetwork(): NetworkState {
     const listener = AppState.addEventListener('change', check);
     return () => {
       alive = false;
+      if (soon != null) clearTimeout(soon);
       clearInterval(timer);
       listener.remove();
     };

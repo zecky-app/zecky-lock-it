@@ -79,7 +79,13 @@ export function PhraseCheck({
           onPress={onShowPhrase}
         />
         {onLater != null && (
-          <Button label="Later" variant="back" onPress={onLater} />
+          <>
+            <Button label="Later" variant="back" onPress={onLater} />
+            <Text style={styles.laterNote}>
+              Without a checked paper copy, a lost or reset phone means lost
+              Zcash. Zecky reminds you until the words are checked.
+            </Text>
+          </>
         )}
       </View>
     </View>
@@ -88,6 +94,14 @@ export function PhraseCheck({
 
 const useStyles = makeStyles(colors => ({
   question: { marginBottom: space.lg },
+  laterNote: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: space.sm,
+  },
   label: {
     fontFamily: fonts.sans,
     fontSize: 13,

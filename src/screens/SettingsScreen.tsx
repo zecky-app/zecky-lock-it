@@ -3,6 +3,7 @@ import * as Keychain from 'react-native-keychain';
 import {
   AppState,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -10,17 +11,24 @@ import {
   Switch,
   Text,
   View,
+  Linking,
 } from 'react-native';
 import { Button } from '../components/Button';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RoomHeader, SheetCorner, SheetHeader } from '../components/lock';
+import {
+  RoomHeader,
+  SheetCorner,
+  SheetHeader,
+  ZeckyLock,
+} from '../components/lock';
 import { Icon, IconName } from '../components/Icon';
 import { BirthdayNote } from '../components/BirthdayNote';
 import { PhraseGrid } from '../components/PhraseGrid';
 import { PinPad } from '../components/PinPad';
-import { CURRENCIES, Currency, NETWORK } from '../config';
-import { about, ENGINE_RELEASE } from '../lib/about';
+import { CURRENCIES, Currency, NETWORK, PRIVACY_URL } from '../config';
+import { about } from '../lib/about';
 import { NU7_HEIGHT, blockSeconds } from '../lib/upgrades';
+import { recommendedIosUpdate } from '../lib/iosVersion';
 import {
   clearPin,
   secondsUntilRetry,
@@ -63,7 +71,7 @@ import {
   useColors,
   useThemeMode,
 } from '../theme';
-import { loadWallet } from '../wallet/seed';
+import { loadWalletKeys, readSeed, seedPresent } from '../wallet/seed';
 import { useContacts } from '../lib/contacts';
 import { eraseWallet } from '../lib/erase';
 import { PhraseCheck } from '../components/PhraseCheck';
@@ -72,9 +80,9 @@ import { setPhraseUnconfirmed, usePhraseUnconfirmed } from '../lib/phraseCheck';
 import { useServer } from '../lib/server';
 import { TorStatus, useTorWanted } from '../lib/tor';
 import { ContactsPage } from './settings/ContactsPage';
+import { AcknowledgementsPage } from './settings/AcknowledgementsPage';
 import { HowItWorksPage } from './settings/HowItWorksPage';
 import { ServerPage } from './settings/ServerPage';
-import { Tools } from 'react-native-zcash';
 
 interface Props {
   visible: boolean;
@@ -97,7 +105,14 @@ interface Props {
   /** Latest block height while fully synced (0 otherwise), for the 48-hour key removal. */
   networkHeight: number;
   /** Open straight on this page instead of the menu. */
-  startOn?: 'server' | 'phrase' | 'display' | 'seckey';
+  startOn?:
+    | 'server'
+    | 'phrase'
+    | 'display'
+    | 'seckey'
+    | 'keys'
+    | 'how'
+    | 'security';
   onClose: () => void;
 }
 
@@ -114,7 +129,8 @@ type Page =
   | 'erase'
   | 'how'
   | 'contacts'
-  | 'server';
+  | 'server'
+  | 'acknowledgements';
 
 /** A code entry in progress, and what it is for. */
 type PinFlow =
@@ -159,6 +175,7 @@ const THEME_LABELS = { dark: 'Dark', light: 'Light', auto: 'Auto' } as const;
 const TITLES: Record<Page, string> = {
   menu: 'Settings',
   about: 'About',
+  acknowledgements: 'Acknowledgements',
   display: 'Display',
   security: 'Security',
   keys: 'Keys to the lock',
@@ -175,6 +192,7 @@ const TITLES: Record<Page, string> = {
 const SUBTITLES: Record<Page, string> = {
   menu: '',
   about: 'This install of Zecky Lock it.',
+  acknowledgements: 'The open-source software inside Zecky.',
   display: 'How amounts and colors look.',
   security: 'Who can open Zecky and the lock.',
   keys: 'Everything that lets you in or opens the lock.',
@@ -272,17 +290,37 @@ function KeyRow(props: {
   toggle?: { value: boolean; onChange: (next: boolean) => void };
   value?: string;
   onPress?: () => void;
+  /** One line on what this key is for, behind a small ⓘ. */
+  info?: string;
 }) {
   const styles = useStyles();
   const colors = useColors();
+  const [infoOpen, setInfoOpen] = useState(false);
   const content = (
     <>
       <View style={styles.keyNumber}>
         <Text style={styles.keyNumberText}>{props.number}</Text>
       </View>
       <View style={styles.lineText}>
-        <Text style={styles.lineLabel}>{props.label}</Text>
+        <View style={styles.keyTitleRow}>
+          <Text style={styles.lineLabel}>{props.label}</Text>
+          {props.info != null && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`What ${props.label} is for`}
+              accessibilityState={{ expanded: infoOpen }}
+              hitSlop={10}
+              onPress={() => setInfoOpen(o => !o)}
+              style={styles.infoButton}
+            >
+              <Icon name="info" size={15} color={colors.goldDim} />
+            </Pressable>
+          )}
+        </View>
         <Text style={styles.lineHint}>{props.hint}</Text>
+        {infoOpen && props.info != null && (
+          <Text style={styles.keyInfo}>{props.info}</Text>
+        )}
       </View>
       {props.toggle != null ? (
         <Switch
@@ -337,6 +375,12 @@ export function SettingsScreen({
   const insets = useSafeAreaInsets();
   const [page, setPage] = useState<Page>('menu');
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // About: Ironwood on one line; the older pools open under it.
+  const [poolsOpen, setPoolsOpen] = useState(false);
+  const otherPools = POOLS.filter(p => p.key !== 'ironwood').reduce(
+    (sum, p) => sum + BigInt(pools?.[p.key]?.total ?? '0'),
+    0n,
+  );
 
   const [phrase, setPhrase] = useState<string | null>(null);
   const [phraseError, setPhraseError] = useState<string | null>(null);
@@ -367,6 +411,25 @@ export function SettingsScreen({
   useEffect(() => {
     if (visible) setPage(startOn ?? 'menu');
   }, [visible, startOn]);
+  // Self-audit K1: whether the Secure Enclave guards the phrase (it cannot
+  // without an iPhone passcode), and whether iOS has the DarkSword fixes.
+  const [phraseGuarded, setPhraseGuarded] = useState<boolean | null>(null);
+  // Audit C-01: iOS removes the guarded phrase when the passcode is turned
+  // off. Checked without a prompt.
+  const [phraseGone, setPhraseGone] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    loadWalletKeys()
+      .then(keys => setPhraseGuarded(keys?.guarded ?? null))
+      .catch(() => setPhraseGuarded(null));
+    seedPresent()
+      .then(present => setPhraseGone(!present))
+      .catch(() => setPhraseGone(false));
+  }, [visible]);
+  const iosUpdate =
+    Platform.OS === 'ios'
+      ? recommendedIosUpdate(String(Platform.Version))
+      : null;
 
   // The words are only on screen while this page is open and the app is
   // in front: leaving the page, closing the sheet or switching apps
@@ -547,10 +610,10 @@ export function SettingsScreen({
 
   const revealKey = async () => {
     try {
-      const stored = await loadWallet();
-      if (stored == null) throw new Error('No wallet found on this phone.');
+      const keys = await loadWalletKeys();
+      if (keys == null) throw new Error('No wallet found on this phone.');
       setPhraseError(null);
-      setViewKey(await Tools.deriveViewingKey(stored.mnemonic, NETWORK));
+      setViewKey(keys.ufvk);
     } catch (e) {
       setPhraseError(e instanceof Error ? e.message : String(e));
     }
@@ -576,19 +639,28 @@ export function SettingsScreen({
         return;
       }
     }
+    // Self-audit K1: the Secure Enclave releases the words only after Face
+    // ID or the passcode. Cancelling leaves them hidden.
+    let words: string;
     try {
-      const stored = await loadWallet();
-      if (stored == null) throw new Error('No wallet found on this phone.');
-      setPhraseError(null);
-      setPhrase(stored.mnemonic);
-    } catch (e) {
-      setPhraseError(e instanceof Error ? e.message : String(e));
+      words = await readSeed('Show recovery phrase');
+    } catch {
+      return;
     }
+    setPhraseError(null);
+    setPhrase(words);
   };
 
   // Without an app code, the iPhone's own Face ID or passcode guards the
   // words. Cancelling leaves them hidden.
   const revealWithDeviceCheck = async () => {
+    // A guarded phrase is its own Face ID check: no second prompt.
+    const keys = await loadWalletKeys().catch(() => null);
+    if (keys?.guarded === true) {
+      setNoPasscode(false);
+      await reveal();
+      return;
+    }
     const result = await confirmOwner('Show recovery phrase');
     if (result === 'cancelled') return;
     setNoPasscode(result === 'no-passcode');
@@ -680,12 +752,6 @@ export function SettingsScreen({
                 </View>
                 <View style={styles.card}>
                   <MenuRow
-                    icon="eye"
-                    label="How Zecky works"
-                    value=""
-                    onPress={() => setPage('how')}
-                  />
-                  <MenuRow
                     icon="info"
                     label="About"
                     value=""
@@ -693,6 +759,14 @@ export function SettingsScreen({
                     last
                   />
                 </View>
+                <Pressable
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => setPage('how')}
+                  style={styles.disclosure}
+                >
+                  <Text style={styles.disclosureText}>How Zecky works ›</Text>
+                </Pressable>
               </>
             )}
 
@@ -710,37 +784,76 @@ export function SettingsScreen({
                     last
                   />
                 </View>
-
                 <Text style={styles.section}>Your Zcash by pool</Text>
                 <View style={styles.card}>
-                  {POOLS.map((pool, i) => {
+                  {POOLS.filter(
+                    pool => pool.key === 'ironwood' || poolsOpen,
+                  ).map((pool, i, shown) => {
                     const b = pools?.[pool.key];
                     const total = b?.total ?? '0';
                     const confirming =
                       b != null && BigInt(b.available) < BigInt(b.total);
+                    const main = pool.key === 'ironwood';
+                    const amount = (
+                      <View style={styles.poolValue}>
+                        <Text style={styles.poolAmount}>
+                          {pools == null
+                            ? '…'
+                            : hidden
+                            ? '••••'
+                            : formatExact(total, unit)}
+                        </Text>
+                        {confirming && !hidden && (
+                          <Text style={styles.poolSub}>
+                            {formatExact(b.available, unit)} usable now
+                          </Text>
+                        )}
+                        {main && !poolsOpen && otherPools > 0n && !hidden && (
+                          <Text style={styles.poolOther}>
+                            + {formatExact(otherPools.toString(), unit)} in
+                            other pools
+                          </Text>
+                        )}
+                      </View>
+                    );
+                    const rowStyle = [
+                      styles.line,
+                      i < shown.length - 1 && styles.divider,
+                    ];
+                    if (main) {
+                      return (
+                        <Pressable
+                          key={pool.key}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: poolsOpen }}
+                          accessibilityHint="Shows the other pools"
+                          onPress={() => setPoolsOpen(o => !o)}
+                          style={rowStyle}
+                        >
+                          <Text style={styles.lineLabel}>
+                            {pool.name}{' '}
+                            <Text style={styles.poolChevron}>
+                              {poolsOpen ? '‹' : '›'}
+                            </Text>
+                          </Text>
+                          {amount}
+                        </Pressable>
+                      );
+                    }
+                    // The older pools, greyed out. Transparent is marked
+                    // red: anyone can see what is in it.
                     return (
                       <View
                         key={pool.key}
                         style={[
-                          styles.line,
-                          i < POOLS.length - 1 && styles.divider,
+                          rowStyle,
+                          pool.key === 'transparent' && styles.poolExposed,
                         ]}
                       >
-                        <Text style={styles.lineLabel}>{pool.name}</Text>
-                        <View style={styles.poolValue}>
-                          <Text style={styles.poolAmount}>
-                            {pools == null
-                              ? '…'
-                              : hidden
-                              ? '••••'
-                              : formatExact(total, unit)}
-                          </Text>
-                          {confirming && !hidden && (
-                            <Text style={styles.poolSub}>
-                              {formatExact(b.available, unit)} usable now
-                            </Text>
-                          )}
-                        </View>
+                        <Text style={[styles.lineLabel, styles.poolQuiet]}>
+                          {pool.name}
+                        </Text>
+                        <View style={styles.poolQuiet}>{amount}</View>
                       </View>
                     );
                   })}
@@ -761,13 +874,34 @@ export function SettingsScreen({
                 {detailsOpen && (
                   <View style={styles.card}>
                     <Line label="Network" value={NETWORK} />
-                    <Line label="Engine release" value={ENGINE_RELEASE} />
                     <Line
                       label="react-native-zcash"
                       value={about.zcashEngine}
                     />
                     <Line label="System" value={about.system} />
                     <Line label="React Native" value={about.reactNative} last />
+                  </View>
+                )}
+                {detailsOpen && (
+                  <View style={styles.smallLinks}>
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityHint="Opens in Safari"
+                      hitSlop={8}
+                      onPress={() =>
+                        Linking.openURL(PRIVACY_URL).catch(() => {})
+                      }
+                    >
+                      <Text style={styles.smallLink}>Privacy policy</Text>
+                    </Pressable>
+                    <Text style={styles.smallDot}>·</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => setPage('acknowledgements')}
+                    >
+                      <Text style={styles.smallLink}>Acknowledgements</Text>
+                    </Pressable>
                   </View>
                 )}
               </>
@@ -869,11 +1003,36 @@ export function SettingsScreen({
             )}
 
             {page === 'how' && <HowItWorksPage />}
+            {page === 'acknowledgements' && <AcknowledgementsPage />}
             {page === 'contacts' && <ContactsPage />}
             {page === 'server' && <ServerPage tor={tor} />}
 
             {page === 'security' && (
               <>
+                {phraseGone && (
+                  <Text style={[styles.warning, styles.noTop]}>
+                    Your recovery phrase is no longer on this iPhone. iOS
+                    removes it when the iPhone passcode is turned off. Your
+                    Zcash is safe as long as you have your 24 words on paper:
+                    erase this wallet and restore from them. Until then Zecky
+                    can show your balance but cannot send or lock in.
+                  </Text>
+                )}
+                {phraseGuarded === false && !phraseGone && (
+                  <Text style={[styles.warning, styles.noTop]}>
+                    This iPhone has no passcode, so the Secure Enclave cannot
+                    guard your recovery phrase. Set a passcode in the iPhone’s
+                    Settings; Zecky then moves the phrase there at the next
+                    start.
+                  </Text>
+                )}
+                {iosUpdate != null && (
+                  <Text style={styles.quietNote}>
+                    This iPhone runs iOS {String(Platform.Version)}. Updating to
+                    iOS {iosUpdate} or later (Settings › General › Software
+                    Update) closes the DarkSword attack on iPhones.
+                  </Text>
+                )}
                 <View style={styles.card}>
                   <MenuRow
                     icon="lock"
@@ -921,6 +1080,7 @@ export function SettingsScreen({
                 <View style={styles.card}>
                   <KeyRow
                     number={1}
+                    info="Asked each time Zecky opens, so someone holding your unlocked iPhone can't look inside."
                     label="Opening Zecky"
                     hint={
                       askStart ? 'Asks that it is you' : 'Opens straight away'
@@ -935,6 +1095,7 @@ export function SettingsScreen({
                   />
                   <KeyRow
                     number={2}
+                    info="Asked again before the lock opens, so nobody can send just because Zecky is open."
                     label="Opening the lock"
                     hint={
                       askOpenLock
@@ -951,6 +1112,7 @@ export function SettingsScreen({
                   />
                   <KeyRow
                     number={3}
+                    info="A question and a short pause before the lock opens: time to say no when someone is rushing you."
                     label="Really open the lock?"
                     hint="A question and a short wait"
                     value={WAIT_SHORT[openWait]}
@@ -958,6 +1120,7 @@ export function SettingsScreen({
                   />
                   <KeyRow
                     number={4}
+                    info="A physical key you tap against your iPhone. Tapping it confirms the payment; without it, nothing leaves."
                     label="Security key"
                     hint="Tapped before sending"
                     value={
@@ -1050,6 +1213,14 @@ export function SettingsScreen({
                     ? ' The recovery phrase also asks your security key.'
                     : ''}
                 </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => setPage('how')}
+                  style={styles.disclosure}
+                >
+                  <Text style={styles.disclosureText}>How the keys work ›</Text>
+                </Pressable>
               </>
             )}
 
@@ -1096,12 +1267,18 @@ export function SettingsScreen({
                 ) : (
                   <>
                     {keyCount === 0 && (
-                      <Text style={styles.info}>
-                        Tap a security key, such as a YubiKey, against the top
-                        of your iPhone. From then on, sending Zcash asks that
-                        key too. Nothing about you is stored on the key, and
-                        nothing goes over the internet.
-                      </Text>
+                      <View style={styles.empty}>
+                        <ZeckyLock open={false} size={64} />
+                        <Text style={styles.emptyTitle}>
+                          No security key yet
+                        </Text>
+                        <Text style={styles.emptyText}>
+                          Tap a key such as a YubiKey against the top of your
+                          iPhone. From then on, sending asks that key too.
+                          Nothing about you is stored on it, and nothing goes
+                          over the internet.
+                        </Text>
+                      </View>
                     )}
 
                     {keysState.removal != null && removalEnd != null && (
@@ -1109,8 +1286,9 @@ export function SettingsScreen({
                         <Text style={styles.lineLabel}>Removing all keys</Text>
                         <Text style={styles.lineHint}>
                           After {usDateTime(removalEnd)}, once the Zcash network
-                          also shows 48 hours. Until then, your keys are still
-                          asked.
+                          also shows 48 hours, with Zecky on one of its public
+                          servers (Settings › Network). Until then, your keys
+                          are still asked.
                         </Text>
                         <Pressable
                           accessibilityRole="button"
@@ -1519,6 +1697,8 @@ export function SettingsScreen({
                   setPage('security');
                 } else if (page === 'openwait' || page === 'seckey') {
                   setPage('keys');
+                } else if (page === 'acknowledgements') {
+                  setPage('about');
                 } else setPage('menu');
               }}
             />
@@ -1592,6 +1772,36 @@ const useStyles = makeStyles(colors => ({
     textAlign: 'center',
   },
   disclosure: { alignSelf: 'center', marginTop: space.lg, padding: 4 },
+  quietNote: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
+    marginBottom: space.sm,
+  },
+  keyTitleRow: { flexDirection: 'row', alignItems: 'center' },
+  infoButton: { marginLeft: 6, padding: 2 },
+  keyInfo: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.text,
+    marginTop: 6,
+  },
+  empty: { alignItems: 'center', paddingVertical: space.lg, gap: 6 },
+  emptyTitle: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 20,
+    color: colors.text,
+    marginTop: space.sm,
+  },
+  emptyText: {
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
   disclosureText: {
     fontFamily: fonts.sansMedium,
     fontSize: 14,
@@ -1698,6 +1908,32 @@ const useStyles = makeStyles(colors => ({
     fontSize: 14,
     color: colors.text,
     fontVariant: ['tabular-nums'],
+  },
+  poolOther: {
+    fontFamily: fonts.sans,
+    fontSize: 11.5,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  poolChevron: { color: colors.goldDim },
+  poolQuiet: { opacity: 0.45 },
+  // A thin red line: anything in Transparent is visible to everyone.
+  poolExposed: {
+    borderLeftWidth: 2,
+    borderLeftColor: colors.danger,
+    paddingLeft: space.sm,
+  },
+  smallLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: space.md,
+  },
+  smallLink: { fontFamily: fonts.sans, fontSize: 12.5, color: colors.goldDim },
+  smallDot: {
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
+    color: colors.textMuted,
+    marginHorizontal: space.sm,
   },
   poolSub: {
     fontFamily: fonts.sans,

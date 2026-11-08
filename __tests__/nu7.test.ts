@@ -74,3 +74,13 @@ test('a birthday estimate after NU7 never starts too late', () => {
   // Nov 1 is ~4.5 days before NU7: about 5,200 blocks of 75 s before it.
   expect(height).toBeLessThan(NU7_HEIGHT - 5000);
 });
+
+test('the linked engine answering "no NU7" pauses sending (C-42)', () => {
+  const up = jest.requireActual('../src/lib/upgrades');
+  up.setEngineKnowsNu7(false);
+  expect(up.nu7Pauses(up.NU7_HEIGHT + 10)).toBe(true);
+  up.setEngineKnowsNu7(true);
+  expect(up.nu7Pauses(up.NU7_HEIGHT + 10)).toBe(false);
+  up.setEngineKnowsNu7(null);
+  expect(up.nu7Pauses(up.NU7_HEIGHT + 10)).toBe(!up.ENGINE_KNOWS_NU7);
+});

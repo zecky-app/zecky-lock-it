@@ -14,6 +14,8 @@ import { NETWORK, WALLET_ALIAS } from '../config';
 // Any of Zecky's own settings also means an update, as a second safety net:
 // they live in the same store as the flag and go with the app.
 const KEY = 'zecky.installed';
+/** What the last check saw (diagnostics, no secrets; not shown in the app). */
+const CHECK_KEY = 'zecky.installcheck';
 /** Every settings key Zecky writes, except the install flag itself. */
 export const SETTINGS_KEYS = [
   'zecky.phraseUnconfirmed',
@@ -28,11 +30,16 @@ export const SETTINGS_KEYS = [
   'zecky.openWait',
   'zecky.ask.start',
   'zecky.ask.openLock',
+  'zecky.tour.seen',
+  'zecky.milestone.seen',
+  'zecky.installcheck',
 ];
 
 /** Every Keychain item Zecky keeps. Add new ones here and in eraseWallet. */
 export const KEYCHAIN_SERVICES = [
   'app.zecky.lockit.seed',
+  'app.zecky.lockit.seedguarded',
+  'app.zecky.lockit.wallet',
   'app.zecky.lockit.pin',
   'app.zecky.lockit.pinstate',
   'app.zecky.lockit.contacts',
@@ -41,6 +48,9 @@ export const KEYCHAIN_SERVICES = [
   'app.zecky.lockit.phrasestate',
   'app.zecky.lockit.owner',
   'app.zecky.lockit.seckeys',
+  'app.zecky.lockit.seckeysheight',
+  'app.zecky.lockit.sent',
+  'app.zecky.lockit.servers',
 ] as const;
 
 /**
@@ -55,31 +65,53 @@ export async function clearIfFreshInstall(): Promise<boolean> {
   // When in doubt, keep: losing a wallet is worse than keeping one. Only a
   // clear "no files" from the wallet engine, with no settings either, counts
   // as a fresh install.
-  const hasSettings = SETTINGS_KEYS.some(key => {
+  const found = SETTINGS_KEYS.filter(key => {
     const value = Settings.get(key);
     return value !== undefined && value !== null;
   });
+  const hasSettings = found.length > 0;
   let noWalletFiles = false;
+  let files = 'not asked';
   const native = NativeModules.RNZcash;
+  if (!hasSettings && typeof native?.walletFilesExist !== 'function') {
+    files = 'check unavailable';
+  }
   if (!hasSettings && typeof native?.walletFilesExist === 'function') {
     try {
-      noWalletFiles =
-        (await native.walletFilesExist(WALLET_ALIAS, NETWORK)) === false;
-    } catch {
+      const exists = await native.walletFilesExist(WALLET_ALIAS, NETWORK);
+      noWalletFiles = exists === false;
+      files = `exist: ${String(exists)}`;
+    } catch (e) {
       noWalletFiles = false;
+      files = `check failed: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
   let cleared = false;
+  const removed: string[] = [];
+  const failed: string[] = [];
   if (noWalletFiles) {
     for (const service of KEYCHAIN_SERVICES) {
       try {
-        if (await Keychain.resetGenericPassword({ service })) cleared = true;
+        if (await Keychain.resetGenericPassword({ service })) {
+          cleared = true;
+          removed.push(service.replace('app.zecky.lockit.', ''));
+        }
       } catch {
-        // Try the others.
+        failed.push(service.replace('app.zecky.lockit.', ''));
       }
     }
   }
-  Settings.set({ [KEY]: true });
+  // Diagnostics (no secrets): what this first start saw and did.
+  Settings.set({
+    [KEY]: true,
+    [CHECK_KEY]: JSON.stringify({
+      at: new Date().toISOString(),
+      settings: found,
+      files,
+      removed,
+      failed,
+    }),
+  });
   return cleared;
 }

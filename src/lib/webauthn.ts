@@ -217,7 +217,12 @@ function checkClientData(
   type: 'webauthn.create' | 'webauthn.get',
   challenge: Uint8Array,
 ) {
-  let data: { type?: unknown; challenge?: unknown };
+  let data: {
+    type?: unknown;
+    challenge?: unknown;
+    origin?: unknown;
+    crossOrigin?: unknown;
+  };
   try {
     data = JSON.parse(utf8Decode(clientDataJSON));
   } catch {
@@ -228,6 +233,12 @@ function checkClientData(
   if (!equalBytes(fromBase64(data.challenge), challenge)) {
     fail('Key answer is for another request');
   }
+  // Audit C-47: when the answer names where it was made, it must be Zecky's
+  // own site, and never from inside another site's frame.
+  if (data.origin !== undefined && data.origin !== `https://${RP_ID}`) {
+    fail('Key answer is for another app or site');
+  }
+  if (data.crossOrigin === true) fail('Key answer is for another app or site');
 }
 
 function checkRp(auth: AuthData) {

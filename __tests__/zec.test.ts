@@ -87,3 +87,25 @@ test('confirming amount: private funds not usable yet', () => {
   expect(w('800000', '300000', '500000')).toBe('0');
   expect(w('100', '0', '500')).toBe('0');
 });
+
+test('US-style amounts: an ambiguous comma and a dot in zats are refused (C-19)', () => {
+  const { parseZats } = jest.requireActual('../src/lib/zec');
+  expect(parseZec('1,500')).toBeNull();
+  expect(parseZec('1,5')).toBe('150000000');
+  // A Dutch keyboard's decimal key: these can only mean one thing.
+  expect(parseZec('0,001')).toBe('100000');
+  expect(parseZec(',001')).toBe('100000');
+  expect(parseZec('12,34')).toBe('1234000000');
+  expect(parseZec('0,025')).toBe('2500000');
+  expect(parseZats('1,500')).toBe('1500');
+  expect(parseZats('1.5')).toBeNull();
+});
+
+test('TEX addresses count as transparent (C-16)', () => {
+  const { isTransparentAddress } = jest.requireActual('../src/lib/zec');
+  expect(
+    isTransparentAddress('tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte'),
+  ).toBe(true);
+  expect(isTransparentAddress('t1abc')).toBe(true);
+  expect(isTransparentAddress('u1abc')).toBe(false);
+});

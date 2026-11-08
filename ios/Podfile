@@ -52,5 +52,11 @@ target 'Zecky' do
         end
       end
     end
+
+    # Audit C-35: refuse downloaded pods whose code differs from ios/Pods.sha256.
+    check = File.expand_path('../scripts/check-pods.sh', __dir__)
+    unless system('bash', check)
+      raise 'Pods differ from ios/Pods.sha256 (see above). Not installing.'
+    end
   end
 end

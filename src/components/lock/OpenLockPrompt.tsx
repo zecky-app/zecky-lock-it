@@ -7,6 +7,7 @@ import { fonts, makeStyles, space, useColors } from '../../theme';
 import { Button } from '../Button';
 import { PinPad } from '../PinPad';
 import { ZeckyLock } from './ZeckyLock';
+import { heldFor } from '../../lib/lockedSince';
 
 interface Props {
   visible: boolean;
@@ -112,11 +113,9 @@ export function OpenLockPrompt({
   const held =
     days == null
       ? ''
-      : days === 0
+      : days < 1
       ? 'This Zcash was locked today. '
-      : `This Zcash has been locked for ${days} ${
-          days === 1 ? 'day' : 'days'
-        }. `;
+      : `This Zcash has been locked ${heldFor(days)}. `;
 
   const r = RING / 2 - 3;
   const circumference = 2 * Math.PI * r;

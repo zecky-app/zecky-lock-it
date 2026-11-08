@@ -1,3 +1,4 @@
+import type { Transaction } from 'react-native-zcash';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -15,8 +16,10 @@ import {
   LockInPrompt,
   MilestoneRing,
   OpenLockPrompt,
+  Tour,
   ZeckyLock,
 } from '../components/lock';
+import { finishTour, showTour, tourSeen, useTourShowing } from '../lib/tour';
 import type { Currency } from '../config';
 import { formatFiat, usePrices } from '../lib/price';
 import {
@@ -36,8 +39,13 @@ import {
   useServer,
 } from '../lib/server';
 import { txKind } from '../lib/transactions';
-import { daysSince, lockedSince } from '../lib/lockedSince';
-import { nextMilestone } from '../lib/milestones';
+import {
+  daysSince,
+  heldFor,
+  historyComplete,
+  lockedSince,
+} from '../lib/lockedSince';
+import { milestoneState } from '../lib/milestones';
 import { confirmOwner } from '../lib/deviceAuth';
 import { usePinEnabled } from '../lib/pin';
 import { SYNC_DROPPED } from '../lib/errors';
@@ -55,9 +63,12 @@ import { torBlocksRelease, useTorWanted } from '../lib/tor';
 import { nu7Pauses } from '../lib/upgrades';
 import { Unit, formatDisplay, formatExact } from '../lib/zec';
 import { fonts, makeStyles, space, useColors } from '../theme';
-import type { StoredWallet } from '../wallet/seed';
+import type { WalletKeys } from '../wallet/seed';
+import { grantRelease, revokeRelease } from '../lib/releaseGrant';
 import { SyncStatus, useSynchronizer } from '../wallet/useSynchronizer';
 import { ActivityScreen } from './ActivityScreen';
+import { SyncScreen } from './SyncScreen';
+import { HoldingScreen } from './HoldingScreen';
 import { ReceiveScreen } from './ReceiveScreen';
 import { SendScreen } from './SendScreen';
 import { SettingsScreen } from './SettingsScreen';
@@ -65,7 +76,7 @@ import { usePhraseUnconfirmed } from '../lib/phraseCheck';
 import { TransactionScreen } from './TransactionScreen';
 
 interface Props {
-  wallet: StoredWallet;
+  wallet: WalletKeys;
   isNew: boolean;
   /** The app-code screen is covering the app: close any open sheet. */
   locked: boolean;
@@ -141,9 +152,38 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   const [hidden, setHidden] = useState<boolean>(loadHidden);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsStart, setSettingsStart] = useState<
-    'server' | 'phrase' | 'display' | 'seckey' | undefined
+    | 'server'
+    | 'phrase'
+    | 'display'
+    | 'seckey'
+    | 'keys'
+    | 'how'
+    | 'security'
+    | undefined
   >();
+  // The three-step tour: once, when the wallet first opens on this phone,
+  // and again when asked for from How Zecky works.
+  const tourShowing = useTourShowing();
+  useEffect(() => {
+    if (!locked && !tourSeen()) showTour();
+  }, [locked]);
+  useEffect(() => {
+    if (tourShowing) setSettingsOpen(false);
+  }, [tourShowing]);
+  // iOS shows one full-screen sheet at a time: open the tour only once
+  // Settings has closed.
+  const [tourVisible, setTourVisible] = useState(false);
+  useEffect(() => {
+    if (!tourShowing || settingsOpen || locked) {
+      setTourVisible(false);
+      return;
+    }
+    const t = setTimeout(() => setTourVisible(true), 450);
+    return () => clearTimeout(t);
+  }, [tourShowing, settingsOpen, locked]);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [holdingOpen, setHoldingOpen] = useState(false);
   const phraseUnconfirmed = usePhraseUnconfirmed();
   const [currency, setCurrency] = useState<Currency | null>(loadCurrency);
   const [currencyChosen, setCurrencyChosen] = useState(isCurrencyChosen);
@@ -382,6 +422,7 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     270 +
     (outside || lockingIn ? 24 : 0) +
     (phraseUnconfirmed && BigInt(state.totalZatoshi) > 0n ? 24 : 0) +
+    (wallet.seedMissing ? 24 : 0) +
     (!currencyChosen ? 22 : 0);
   const heroScale =
     area === 0 ? 1 : Math.min(1, Math.max(0.5, (area - below) / 396));
@@ -397,9 +438,19 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   }, [area > 0, fade]); // eslint-disable-line react-hooks/exhaustive-deps
   const [asking, setAsking] = useState(false);
   const [lockOpen, setLockOpen] = useState(false);
-  const since = lockedSince(state.transactions);
+  // An empty lock has no count, whatever the history says. The count waits
+  // until the wallet has been fully synced once (after a restore the newest
+  // blocks are scanned first, so it would jump), and is left out when the
+  // history does not reach back to the start (a restore from a later date).
+  const holding = BigInt(state.totalZatoshi) > 0n;
+  const since =
+    holding &&
+    (synced || state.everSynced) &&
+    historyComplete(state.transactions, state.totalZatoshi)
+      ? lockedSince(state.transactions)
+      : null;
   const heldDays = since == null ? null : daysSince(since);
-  const milestone = nextMilestone(heldDays ?? 0);
+  const milestone = milestoneState(heldDays ?? 0);
   // The plate always shows the lock's state; the value in your currency is
   // an estimate that moves with the price, so it sits under the balance.
   const plateText = lockOpen ? 'OPEN' : 'LOCKED';
@@ -409,21 +460,13 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         ? '≈ ••••'
         : `≈ ${formatFiat(state.totalZatoshi, price, shownCurrency)}`
       : null;
-  const heldLine =
-    since == null || heldDays == null
-      ? BigInt(state.totalZatoshi) > 0n
-        ? 'Locked on this iPhone'
-        : 'Nothing locked yet. Tap Receive to begin.'
-      : heldDays === 0
-      ? 'Locked since today'
-      : `Locked for ${heldDays} ${heldDays === 1 ? 'day' : 'days'}`;
-  // One quiet line: how long, and the next milestone the ring is filling to.
-  const milestoneText =
-    since != null && milestone != null
-      ? `${milestone.name} on ${new Date(
-          Date.now() + milestone.inDays * 86_400_000,
-        ).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-      : null;
+  // One quiet line, the largest unit only and never a date (a date was read
+  // as an unlock date). An empty lock shows no line at all.
+  const heldLine = !holding
+    ? null
+    : heldDays == null
+    ? 'Locked on this iPhone'
+    : `Locked ${heldFor(heldDays)}`;
   // Home only mentions a payment while it waits for a block; the rest of
   // the history is in Activity.
   const last = state.transactions.find(tx => {
@@ -438,18 +481,10 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     if (last == null) return null;
     const lockedIn = txKind(last) === 'received';
     const what = lockedIn ? 'Receiving' : 'Sending';
-    const when =
-      last.minedHeight > 0 && last.blockTimeInSeconds > 0
-        ? new Date(last.blockTimeInSeconds * 1000).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-          })
-        : 'waiting for a block';
-    if (hidden) return `${what} · ${when}`;
-    return `${what} ${lockedIn ? '+' : '−'}${formatExact(
-      last.value,
-      unit,
-    )} · ${when}`;
+    // Just the amount, calm. The details (waiting for a block,
+    // confirmations) are one tap away.
+    if (hidden) return what;
+    return `${what} ${lockedIn ? '+' : '−'}${formatExact(last.value, unit)}`;
   })();
 
   // Tapping the lock asks "Really open the lock?" first. Once the owner
@@ -512,9 +547,34 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
     setAsking(false);
     setLockOpen(true);
   };
+  // Audit C-09: the wallet only releases while the lock is open. The lock
+  // only opens through the checks above, so the grant follows it.
+  useEffect(() => {
+    if (lockOpen) grantRelease();
+    else {
+      revokeRelease();
+      // A "Send again" that was not released does not carry over (C-22).
+      setSendPrefill(null);
+    }
+  }, [lockOpen]);
+  useEffect(() => () => revokeRelease(), []);
   const closeLock = () => {
     setSending(false);
     setLockOpen(false);
+    setSendPrefill(null);
+  };
+  // Audit C-22: "Send again" goes through the lock like any release.
+  const [sendPrefill, setSendPrefill] = useState<{
+    address: string;
+    memo: string;
+  } | null>(null);
+  const sendAgain = (tx: Transaction) => {
+    setActivityOpen(false);
+    setSendPrefill({
+      address: tx.toAddress ?? '',
+      memo: tx.memos.find(m => m.trim() !== '')?.trim() ?? '',
+    });
+    tapLock();
   };
   useEffect(() => {
     if (locked) {
@@ -581,7 +641,8 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             pointerEvents="none"
           >
             <MilestoneRing
-              progress={milestone?.progress ?? 0}
+              progress={milestone.progress}
+              glow={milestone.reachedToday}
               diameter={Math.round(364 * heroScale)}
             />
           </View>
@@ -646,12 +707,21 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
           </Pressable>
         )}
 
-        <Text style={[styles.held, styles.center]}>
-          {heldLine}
-          {milestoneText != null && (
-            <Text style={styles.milestone}> · {milestoneText}</Text>
-          )}
-        </Text>
+        {heldLine != null &&
+          (since != null ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Shows highlights and milestones"
+              hitSlop={8}
+              onPress={() => setHoldingOpen(true)}
+            >
+              <Text style={[styles.held, styles.center]}>
+                {heldLine} <Text style={styles.heldMore}>›</Text>
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.held, styles.center]}>{heldLine}</Text>
+          ))}
         {(outside || lockingIn) && (
           <Pressable
             accessibilityRole="button"
@@ -712,6 +782,21 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             </Text>
           </Pressable>
         )}
+        {wallet.seedMissing && (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              setSettingsStart('security');
+              setSettingsOpen(true);
+            }}
+            style={styles.needRow}
+          >
+            <Text style={styles.needText}>
+              Recovery phrase no longer on this iPhone ›
+            </Text>
+          </Pressable>
+        )}
 
         {lockOpen ? (
           <>
@@ -761,22 +846,43 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             {state.error}
           </Text>
         )}
+        {state.startFailed && (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={10}
+            onPress={state.retryStart}
+            style={styles.needRow}
+          >
+            <Text style={styles.needText}>Try again ›</Text>
+          </Pressable>
+        )}
 
         <View style={styles.spaceBelow} />
       </Animated.ScrollView>
 
       <View style={styles.bottomBar}>
         <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.dot,
-              synced && styles.dotOk,
-              (cutOff || state.status === 'DISCONNECTED') && styles.dotDanger,
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${statusText}. Show sync details`}
+            hitSlop={10}
+            onPress={() => setSyncOpen(true)}
+            style={({ pressed }) => [
+              styles.statusTap,
+              pressed && styles.statusPressed,
             ]}
-          />
-          <Text style={styles.status} numberOfLines={2}>
-            {statusText}
-          </Text>
+          >
+            <View
+              style={[
+                styles.dot,
+                synced && styles.dotOk,
+                (cutOff || state.status === 'DISCONNECTED') && styles.dotDanger,
+              ]}
+            />
+            <Text style={styles.status} numberOfLines={2}>
+              {statusText}
+            </Text>
+          </Pressable>
           {torWanted && (
             <Pressable
               accessibilityRole="button"
@@ -866,14 +972,30 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
           setSettingsStart(undefined);
         }}
       />
+      <HoldingScreen
+        visible={holdingOpen}
+        transactions={state.transactions}
+        unit={unit}
+        hidden={hidden}
+        onClose={() => setHoldingOpen(false)}
+      />
+      <SyncScreen
+        visible={syncOpen}
+        state={state}
+        birthdayHeight={wallet.birthdayHeight}
+        statusText={statusText}
+        onClose={() => setSyncOpen(false)}
+      />
       <ActivityScreen
         visible={activityOpen}
         transactions={state.transactions}
         unit={unit}
         hidden={hidden}
         onClose={() => setActivityOpen(false)}
+        onSendAgain={sendAgain}
       />
       <SendScreen
+        prefill={sendPrefill}
         visible={sending}
         wallet={state}
         unit={unit}
@@ -902,6 +1024,15 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
         note={shieldNote}
         onLockIn={shield}
         onClose={() => setLockInOpen(false)}
+      />
+      <Tour
+        visible={tourVisible}
+        onFinish={finishTour}
+        onChooseKeys={() => {
+          finishTour();
+          setSettingsStart('keys');
+          setTimeout(() => setSettingsOpen(true), 450);
+        }}
       />
       <OpenLockPrompt
         visible={asking}
@@ -991,6 +1122,7 @@ const useStyles = makeStyles(colors => ({
     color: colors.textMuted,
     marginTop: space.sm + 2,
   },
+  heldMore: { color: colors.goldDim },
   fiat: {
     fontFamily: fonts.sans,
     fontSize: 13,
@@ -998,7 +1130,6 @@ const useStyles = makeStyles(colors => ({
     fontVariant: ['tabular-nums'],
     marginTop: 2,
   },
-  milestone: { fontFamily: fonts.sansMedium, color: colors.gold },
   brass: { alignSelf: 'center', width: 230, marginTop: space.lg },
   needRow: { alignSelf: 'center', marginTop: space.sm, paddingVertical: 2 },
   needText: {
@@ -1039,6 +1170,8 @@ const useStyles = makeStyles(colors => ({
     paddingHorizontal: space.md + 4,
   },
   statusRow: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  statusTap: { flexShrink: 1, flexDirection: 'row', alignItems: 'center' },
+  statusPressed: { opacity: 0.6 },
   dot: {
     width: 8,
     height: 8,

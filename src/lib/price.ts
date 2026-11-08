@@ -29,7 +29,13 @@ export function parsePrices(json: unknown): Prices | null {
 export type PriceSource = 'direct' | 'tor' | 'none';
 
 async function fetchDirect(): Promise<Prices | null> {
-  const response = await fetch(PRICE_URL);
+  // Audit C-32: no cookies, and a plain browser-style name instead of
+  // "Zecky/<build> CFNetwork/…", so the price service cannot single out this
+  // app or this phone from one request to the next.
+  const response = await fetch(PRICE_URL, {
+    credentials: 'omit',
+    headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+  });
   if (!response.ok) return null;
   return parsePrices(await response.json());
 }

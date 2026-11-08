@@ -92,8 +92,9 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
         saveAddresses(defaultAddress, next);
         setSelected(fresh);
       } catch {
-        // Rotation unavailable: stay on what we have.
-        setSelected(current[0] ?? defaultAddress);
+        // Rotation unavailable: stay on what we have, never on the
+        // wallet's first address (audit C-17: it carries a transparent part).
+        setSelected(current[0] ?? null);
       } finally {
         setBusy(false);
       }
@@ -119,8 +120,11 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
       setUsage(counts);
       // Prefer an address that has never been paid (newest first, the
       // wallet's first address last). Only make a new one when all are used.
-      const unused = withDefault(stored, defaultAddress).find(
-        candidate => (counts[candidate] ?? 0) === 0,
+      // Audit C-17: the wallet's first address also has a transparent
+      // receiver, so it is never offered as the shielded address.
+      const unused = stored.find(
+        candidate =>
+          candidate !== defaultAddress && (counts[candidate] ?? 0) === 0,
       );
       if (unused == null) {
         await addNew(stored);
@@ -166,15 +170,21 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
     setCopied(true);
   };
 
+  // The first address only appears in the list once it has been paid, so
+  // its history stays visible without offering it as shielded (C-17).
   const all =
-    defaultAddress == null ? [] : withDefault(generated, defaultAddress);
+    defaultAddress == null
+      ? []
+      : (usage[defaultAddress] ?? 0) > 0
+      ? withDefault(generated, defaultAddress)
+      : generated.filter(a => a !== defaultAddress);
   const used = (a: string) => usage[a] ?? 0;
   const address =
     mode === 'public'
       ? wallet.transparentAddress
       : busy
       ? null
-      : selected ?? defaultAddress;
+      : selected;
 
   return (
     <Modal
@@ -223,7 +233,7 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
                           <Text style={styles.rowNote}>First address</Text>
                         )}
                       </View>
-                      {a === (selected ?? defaultAddress) && (
+                      {a === selected && (
                         <Text style={styles.rowShown}>Shown</Text>
                       )}
                     </Pressable>
@@ -255,9 +265,7 @@ export function ReceiveScreen({ visible, wallet, unit, onClose }: Props) {
                 <RoomHeader
                   open={false}
                   compact={height < 800}
-                  title={
-                    mode === 'private' ? 'Receive' : 'Transparent address'
-                  }
+                  title={mode === 'private' ? 'Receive' : 'Transparent address'}
                   subtitle={
                     mode === 'private'
                       ? 'Your shielded address. Amount and sender stay hidden.'

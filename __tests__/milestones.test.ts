@@ -1,21 +1,32 @@
-import { nextMilestone } from '../src/lib/milestones';
+import { milestoneDays, milestoneState } from '../src/lib/milestones';
+
+test('1 week, every month of the first year, 1 year, then every year', () => {
+  expect(milestoneDays(400)).toEqual([
+    7, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 365, 730,
+  ]);
+});
 
 test('day one is on the way to one week', () => {
-  expect(nextMilestone(0)).toEqual({ name: '1 week', inDays: 7, progress: 0 });
+  expect(milestoneState(0)).toEqual({ progress: 0, reachedToday: false });
+  expect(milestoneState(3).progress).toBeCloseTo(3 / 7);
 });
 
 test('progress is measured from the previous milestone', () => {
-  const m = nextMilestone(65);
-  expect(m?.name).toBe('100 days');
-  expect(m?.inDays).toBe(35);
-  expect(m?.progress).toBeCloseTo((65 - 30) / (100 - 30));
+  expect(milestoneState(10).progress).toBeCloseTo((10 - 7) / (30 - 7));
+  expect(milestoneState(45).progress).toBeCloseTo((45 - 30) / 30);
+  expect(milestoneState(350).progress).toBeCloseTo((350 - 330) / (365 - 330));
+  expect(milestoneState(400).progress).toBeCloseTo((400 - 365) / 365);
 });
 
-test('reaching a milestone points to the next one', () => {
-  expect(nextMilestone(365)?.name).toBe('2 years');
+test('on the milestone day only, the ring is full and glows', () => {
+  for (const day of [7, 30, 60, 330, 365, 730, 1460, 3650]) {
+    expect(milestoneState(day)).toEqual({ progress: 1, reachedToday: true });
+    expect(milestoneState(day + 1).reachedToday).toBe(false);
+    expect(milestoneState(day - 1).reachedToday).toBe(false);
+  }
 });
 
-test('after five years there is no next milestone', () => {
-  expect(nextMilestone(1825)).toBeNull();
-  expect(nextMilestone(4000)).toBeNull();
+test('after the first year, once a year, with no end', () => {
+  expect(milestoneState(390).reachedToday).toBe(false);
+  expect(milestoneState(365 * 14).reachedToday).toBe(true);
 });

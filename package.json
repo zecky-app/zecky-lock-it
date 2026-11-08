@@ -8,11 +8,12 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
-    "postinstall": "patch-package && ./scripts/fetch-engine.sh",
-    "setup": "npm ci --ignore-scripts && patch-package && ./scripts/fetch-engine.sh",
+    "postinstall": "patch-package && ./scripts/fetch-engine.sh && ./scripts/fetch-sapling-params.sh",
+    "setup": "npm ci --ignore-scripts && patch-package && ./scripts/fetch-engine.sh && ./scripts/fetch-sapling-params.sh",
     "check:deps": "npm audit signatures && npm audit --omit=dev --audit-level=critical"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@react-native-clipboard/clipboard": "1.16.3",
     "@scure/bip39": "2.4.0",
     "qrcode-generator": "2.0.4",

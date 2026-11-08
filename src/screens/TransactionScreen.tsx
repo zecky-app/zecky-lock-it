@@ -26,7 +26,7 @@ function status(tx: Transaction): string {
   if (tx.isExpired) return 'Expired. This never left the lock.';
   if (isPending(tx)) {
     return sentEntry(tx.rawTransactionId)?.waiting
-      ? 'Not delivered to the network yet. Zecky sends it out by itself as soon as there is a connection. Do not send it again.'
+      ? 'Not delivered to the network yet. Zecky sends it out by itself while it is open and connected. Do not send it again.'
       : 'Waiting for a block…';
   }
   return `Confirmed in block ${tx.minedHeight.toLocaleString('en-US')}`;
@@ -129,9 +129,7 @@ export function TransactionDetails({ tx }: { tx: Transaction }) {
           </Field>
         )}
         {tx.toAddress != null && tx.toAddress !== '' && (
-          <Field
-            label={self ? 'Sent to (your own address)' : 'Sent to'}
-          >
+          <Field label={self ? 'Sent to (your own address)' : 'Sent to'}>
             <Text style={styles.mono} selectable>
               {tx.toAddress}
             </Text>

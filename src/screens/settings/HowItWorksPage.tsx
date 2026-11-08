@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { LayoutAnimation, Pressable, Text, View } from 'react-native';
 import { Icon, IconName } from '../../components/Icon';
 import { about } from '../../lib/about';
+import { showTour } from '../../lib/tour';
 import { fonts, makeStyles, space, useColors } from '../../theme';
 
 // What people can expect from Zecky, in principles rather than features.
@@ -28,11 +29,16 @@ const CHAPTERS: {
     points: [
       'Receiving is always one tap. Opening the lock to send takes a deliberate moment.',
       'The open lock closes again after sending, after two minutes, or when you leave Zecky.',
-      'The ring around the lock fills towards your next milestone, from 1 week to 5 years.',
+      'The line under your balance says how long your Zcash has been in the lock: “Locked for 3 weeks”. It counts everything in the lock, shielded and transparent alike, so it stays true if some Zcash is still waiting to be locked in. It is never a date, and nothing unlocks on a date: you open the lock yourself whenever you want.',
+      'The ring around the lock fills towards your next milestone: 1 week, then every month of the first year, then every year. On the day you reach one, the ring glows softly.',
+      'Tap that line for highlights of what you hold and your milestones. Each has its own name, from Locked at 1 week to Legend at 4 years. Tap the milestones to see the whole path.',
     ],
     more: [
-      '“Locked for N days” counts from your first payment in, and starts over if the lock was ever emptied.',
-      'Milestones are worked out on this phone from your own payments.',
+      'The count starts at your first payment in after the lock was last empty. Sending, of any size, and receiving more do not reset it; only an empty lock does, and then the line is gone until Zcash comes in again.',
+      'Moves inside the lock (locking in transparent Zcash, the Ironwood move) count as nothing.',
+      'It is worked out on this phone from your own payment history, with no timer stored, so it comes back the same after a restore.',
+      'After a restore the count waits until the first sync is done. It needs the history from before your first payment in: restored from a later date, the line says “Locked on this iPhone” instead. Restoring with an earlier date brings the count back.',
+      'Milestones bring no notifications, badges or pop-ups.',
     ],
   },
   {
@@ -59,12 +65,15 @@ const CHAPTERS: {
       'Your Zcash is controlled by 24 words, made on this phone and never sent anywhere.',
       'Whoever has the 24 words has the Zcash. Lose both the words and this phone, and it is gone for good.',
       'Nobody else has a copy, so nobody can recover them for you.',
+      'The Secure Enclave guards them: iOS releases them only after Face ID or your passcode, when you send, lock in or show them.',
     ],
     more: [
       'The words come from the phone’s secure random generator, checked and mixed with a second source. If that generator isn’t working, Zecky won’t create a wallet.',
-      'The phrase is kept in the phone’s secure storage.',
+      'Syncing uses a viewing key kept next to the phrase: it shows your history but can never move Zcash. The phrase itself is read only when you send, lock in or show it (and once more at the first start after creating or restoring), and is not kept in memory, so a copy of the phone’s Keychain files cannot reveal it.',
+      'Without an iPhone passcode the Secure Enclave cannot guard the phrase. It is then kept on this device only, and Settings › Security says so.',
+      'Turning the iPhone passcode off makes iOS remove the guarded phrase from the phone. Zecky then says so on the main screen and under Security, and can only show your balance until you restore from your 24 words. Keep the paper before you change the passcode.',
       'Zecky asks for three of the words to check your paper. Until you do, Security and the main screen remind you.',
-      'All keys, proofs and payments are made by the official Zcash core (librustzcash), the same code other Zcash wallets use. Zecky’s own code only connects to it. The engine build is public, and the app checks it against fixed checksums.',
+      'The Zcash keys derived from your words, every proof and every payment are made by the official Zcash core (librustzcash), the same code other Zcash wallets use. Zecky’s own code only connects to it. The engine build is public, and it is checked against fixed checksums before Zecky is packaged.',
     ],
   },
   {
@@ -86,7 +95,7 @@ const CHAPTERS: {
       },
       {
         title: 'Security key',
-        text: 'A key such as a YubiKey, tapped against your iPhone. The tap sends the payment.',
+        text: 'A key such as a YubiKey, tapped against your iPhone. Tapping it confirms the payment; Face ID or your passcode then releases it.',
       },
     ],
     points: [
@@ -97,10 +106,10 @@ const CHAPTERS: {
       'Making any of this easier, or choosing a new Zecky code, first asks that it’s you.',
       'A security key is checked on this phone against the key Zecky saved when you added it. Nothing goes over the internet, nothing about you is stored on the key, and Zecky does not show in the key’s own list of logins.',
       'Adding another key, removing one or switching off its other uses first asks one of your keys. Add a backup key and keep it in another place.',
-      'Lost all your keys? Remove them after 48 hours, counted on both the Zcash network and the phone’s clock; tapping a key cancels it. Restoring from your 24 words never asks a key.',
+      'Lost all your keys? Remove them after 48 hours, counted on both the Zcash network and the phone’s clock; tapping a key cancels it. The removal finishes the next time you open Zecky after that time, once it is up to date on one of its public servers, and no key can be added while it runs. Restoring from your 24 words never asks a key.',
       'You can also have a key asked before the 24 words are shown. Then losing every key and your paper means the Zcash is gone.',
       'The key guards sending from this phone. Whoever has your 24 words can still move the Zcash with another wallet, so keep the paper safe.',
-      'The Zecky code is a screen lock, not encryption, and a forgotten code can’t be reset. Without an iPhone passcode or a Zecky code there is nothing to ask, so the 24 words are not protected.',
+      'The Zecky code is a screen lock, not encryption, and a forgotten code can’t be reset. Without an iPhone passcode the 24 words are not guarded by the Secure Enclave, and without a Zecky code too there is nothing to ask.',
     ],
   },
   {
@@ -115,7 +124,7 @@ const CHAPTERS: {
     more: [
       'All your addresses lead to this same lock.',
       'A viewing key shows everything in this wallet but can’t spend. Sharing it can’t be undone.',
-      'Zcash keeps funds in pools. Settings › About shows yours: Ironwood, where new Zcash locks in since NU6.3 (July 2026); Orchard, which Zcash can only leave since then; Sapling; and the public Transparent pool. The oldest pool, Sprout, is closed to new Zcash and not used by Zecky.',
+      'Zcash keeps funds in pools. Settings › About shows yours: Ironwood, where new Zcash locks in since NU6.3 (July 2026). Tap it to see the others: Orchard, which Zcash can only leave since then; Sapling; and the public Transparent pool, marked red. The oldest pool, Sprout, is closed to new Zcash and not used by Zecky.',
     ],
   },
   {
@@ -128,8 +137,8 @@ const CHAPTERS: {
       'Your own node (Rock it) gives the most privacy.',
     ],
     more: [
-      'Pick another server, or your own, under Network. Saved servers and their names stay on this phone.',
-      'Public servers always use an encrypted connection. Your own node on a home-network address stays inside your home network, or is encrypted by Tailscale. Only the Tailscale name (…ts.net) from your Rock it code also proves the node is yours: a home-network address or a Tailscale number cannot be checked, so use those at home only. The status line names them.',
+      'Pick another server, or your own, under Network. Saved servers and their names are kept with Zecky’s settings, which iOS includes in your iCloud or computer backup.',
+      'Public servers always use an encrypted connection. Your own node on a home-network address stays inside your home network, or is encrypted by Tailscale. A Tailscale name (…ts.net) scanned from a code is treated as your own Rock it, with Tor off for it, so only scan the code on your own Rock it’s page. A home-network address or a Tailscale number cannot be checked, so use those at home only. The status line names them.',
       'Whether you are online comes from iOS itself. Only with Rock it on mobile data does Zecky ask your node every 15 seconds whether it answers.',
       'With Tor on, sending, looking up your payments, chain checks and the price go through Tor. Downloading blocks stays direct. While Tor is still connecting or could not connect, Zecky sends and locks in nothing. If one Tor connection fails, a payment is tried again at once through a fresh one.',
       'With your own node, Zecky talks to it directly, also with Tor on: the node is yours, and a Tor connection could not reach a home or Tailscale address. A …ts.net address typed by hand is not counted as your node, so Tor stays on for it. The price still goes through Tor. Your node passes payments on to the Zcash network from your home connection.',
@@ -145,7 +154,8 @@ const CHAPTERS: {
       'Erase wallet (Settings › Security) removes everything from this phone. Your 24 words bring it back.',
     ],
     more: [
-      'The recovery phrase, the Zecky code, your security keys’ public keys, your contacts, your receive addresses and your last known balance are in the phone’s secure storage, on this device only.',
+      'The recovery phrase is in the phone’s Keychain behind the Secure Enclave (Face ID or passcode). The viewing key, the Zecky code, your security keys’ public keys, your contacts, your receive addresses and your last known balance are in the Keychain too, on this device only.',
+      'Settings › Security shows a quiet note when the iPhone’s iOS is older than the release that fixed the DarkSword attack.',
       'Your history is kept in a database on this phone. For a payment that isn’t confirmed yet, the time it was sent is kept until it is.',
       'Only Apple’s own keyboard works inside Zecky, so a keyboard from another app can’t record what you type.',
       'Notes on payments show as plain text, and a note with a link gets a warning.',
@@ -199,6 +209,14 @@ export function HowItWorksPage() {
 
   return (
     <>
+      <Pressable
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={showTour}
+        style={styles.tourLink}
+      >
+        <Text style={styles.tourLinkText}>Show the 3-step tour again ›</Text>
+      </Pressable>
       {CHAPTERS.map(chapter => {
         const isOpen = open.has(chapter.title);
         return (
@@ -319,6 +337,12 @@ const useStyles = makeStyles(colors => ({
     paddingTop: 4,
   },
   point: { flexDirection: 'row', marginTop: space.sm },
+  tourLink: { alignSelf: 'flex-start', marginBottom: space.xs, padding: 2 },
+  tourLinkText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    color: colors.gold,
+  },
   more: {
     marginTop: space.sm,
     paddingTop: 2,

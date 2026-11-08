@@ -32,15 +32,27 @@ export function parseZec(text: string): string | null {
   const whole = match[1];
   const fraction = match[2] ?? '';
   if (whole === '' && fraction === '') return null;
+  if (ambiguousZec(text)) return null;
   const zatoshi =
     BigInt(whole === '' ? '0' : whole) * ZATOSHI_PER_ZEC +
     BigInt(fraction.padEnd(8, '0'));
   return zatoshi > 0n ? zatoshi.toString() : null;
 }
 
+/**
+ * Audit C-19: "1,500" could be 1.5 (comma as the decimal key, as on a Dutch
+ * keyboard) or fifteen hundred (US thousands), so it is refused with a
+ * question rather than guessed. "0,001", "1,5" or "12,34" can only mean one
+ * thing and are read as decimals.
+ */
+export function ambiguousZec(text: string): boolean {
+  return /^[1-9]\d{0,2},\d{3}$/.test(text.trim());
+}
+
 /** Transparent addresses are public and cannot carry a memo. */
 export function isTransparentAddress(address: string): boolean {
-  return /^t[13m2]/.test(address.trim());
+  // Audit C-16: ZIP 320 TEX addresses (tex1…) are transparent-only too.
+  return /^(t[13m2]|tex1)/i.test(address.trim());
 }
 
 export type Unit = 'ZEC' | 'zats';
@@ -70,9 +82,13 @@ export function formatWithUnit(zatoshi: string, unit: Unit): string {
   return `${formatDisplay(zatoshi, unit)} ${unit}`;
 }
 
-/** Parses a whole number of zats, ignoring thousands separators and spaces. */
+/**
+ * Parses a whole number of zats, ignoring comma thousands separators and
+ * spaces. A dot is refused (audit C-19): "1.5" zats is not 15 zats.
+ */
 export function parseZats(text: string): string | null {
-  const digits = text.replace(/[\s,.]/g, '');
+  if (text.includes('.')) return null;
+  const digits = text.replace(/[\s,]/g, '');
   if (!/^\d+$/.test(digits)) return null;
   const value = BigInt(digits);
   return value > 0n ? value.toString() : null;

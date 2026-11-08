@@ -10,6 +10,8 @@
 		0C80B921A6F3F58F76C31292 /* libPods-Zecky.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-Zecky.a */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		2F9F89CA59B3DB3619487FD8 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		5A9C0E1F2B3D4E5F60718295 /* sapling-spend.params in Resources */ = {isa = PBXBuildFile; fileRef = 5A9C0E1F2B3D4E5F60718293 /* sapling-spend.params */; };
+		5A9C0E1F2B3D4E5F60718296 /* sapling-output.params in Resources */ = {isa = PBXBuildFile; fileRef = 5A9C0E1F2B3D4E5F60718294 /* sapling-output.params */; };
 		65C4A8F132ED46E78E48E7C0 /* Inter-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FC6E8E51C8E746C78371343C /* Inter-Regular.ttf */; };
 		6A88D84B826A467FA1660A33 /* Newsreader-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 356579EAF0494E91B22B9854 /* Newsreader-Medium.ttf */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
@@ -25,6 +27,8 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Zecky/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Zecky/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = Zecky/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		5A9C0E1F2B3D4E5F60718293 /* sapling-spend.params */ = {isa = PBXFileReference; lastKnownFileType = file; name = "sapling-spend.params"; path = "Zecky/SaplingParams/sapling-spend.params"; sourceTree = "<group>"; };
+		5A9C0E1F2B3D4E5F60718294 /* sapling-output.params */ = {isa = PBXFileReference; lastKnownFileType = file; name = "sapling-output.params"; path = "Zecky/SaplingParams/sapling-output.params"; sourceTree = "<group>"; };
 		2397F6018C4F460086440B6F /* Inter-SemiBold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Inter-SemiBold.ttf"; path = "../assets/fonts/Inter-SemiBold.ttf"; sourceTree = "<group>"; };
 		24A1196C3090B5F40024C3F4 /* Zecky.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = Zecky.entitlements; path = Zecky/Zecky.entitlements; sourceTree = "<group>"; };
 		356579EAF0494E91B22B9854 /* Newsreader-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Newsreader-Medium.ttf"; path = "../assets/fonts/Newsreader-Medium.ttf"; sourceTree = "<group>"; };
@@ -59,6 +63,8 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
+				5A9C0E1F2B3D4E5F60718293 /* sapling-spend.params */,
+				5A9C0E1F2B3D4E5F60718294 /* sapling-output.params */,
 			);
 			name = Zecky;
 			sourceTree = "<group>";
@@ -192,6 +198,8 @@
 				65C4A8F132ED46E78E48E7C0 /* Inter-Regular.ttf in Resources */,
 				B53F66037958441F9B6EC9FD /* Inter-SemiBold.ttf in Resources */,
 				2F9F89CA59B3DB3619487FD8 /* PrivacyInfo.xcprivacy in Resources */,
+				5A9C0E1F2B3D4E5F60718295 /* sapling-spend.params in Resources */,
+				5A9C0E1F2B3D4E5F60718296 /* sapling-output.params in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -291,7 +299,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Zecky/Zecky.entitlements;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 23;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Zecky/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
@@ -322,7 +330,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Zecky/Zecky.entitlements;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 23;
 				INFOPLIST_FILE = Zecky/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (

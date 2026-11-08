@@ -1,6 +1,7 @@
+import { recordSyncProblem } from '../lib/syncProblems';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NativeModules } from 'react-native';
-import { makeSynchronizer, Synchronizer } from 'react-native-zcash';
+import { makeSynchronizer, Synchronizer, Tools } from 'react-native-zcash';
 import type {
   InitializerConfig,
   ProposalSuccess,
@@ -10,23 +11,17 @@ import type {
 import { NETWORK, WALLET_ALIAS } from '../config';
 import {
   friendlyError,
-  HOME_NODE_SEND,
   SYNC_DROPPED,
   SYNC_DROPPED_LONG,
-  OFFLINE_SEND,
   NU7_PAUSED,
-  SERVER_CHANGED_SEND,
   TOR_NOT_READY,
-  paymentSavedError,
-  SEND_PENDING,
-  SEND_REJECTED,
 } from '../lib/errors';
 import { canReachHomeNode, isOnline } from '../lib/network';
-import { detailFrom, pruneSent, recordSent, txIdsFrom } from '../lib/sentLog';
+import { pruneSent, recordSent } from '../lib/sentLog';
 import { Balances, loadLastBalance, saveLastBalance } from '../lib/lastBalance';
 import { loadAddresses } from '../lib/addressBook';
 import { addOwnAddresses } from '../lib/transactions';
-import { getServer, isHomeNode, sameServer, useServer } from '../lib/server';
+import { getServer, serverLabel, useServer } from '../lib/server';
 import { checkSecurityKey, loadSecurityKeyState } from '../lib/securityKey';
 import {
   getTorWanted,
@@ -36,8 +31,23 @@ import {
   useTorWanted,
 } from '../lib/tor';
 import { mergeTransactions } from '../lib/transactions';
-import { nu7Pauses } from '../lib/upgrades';
-import type { StoredWallet } from './seed';
+import { nu7Pauses, setEngineKnowsNu7 } from '../lib/upgrades';
+import { hasReleaseGrant } from '../lib/releaseGrant';
+import { release } from './release';
+import { amountInRequest } from '../lib/paymentUri';
+import {
+  hasFirstStartSeed,
+  readSeed,
+  SeedMissingError,
+  takeFirstStartSeed,
+  updateViewingKey,
+} from './seed';
+import {
+  ALREADY_RELEASING,
+  SEED_MISSING_LOCK_IN,
+  SEED_NOT_RELEASED_LOCK_IN,
+} from '../lib/errors';
+import type { WalletKeys } from './seed';
 import type { PoolBalances } from '../lib/pools';
 
 /** After this long without progress, a dropped connection suggests another server. */
@@ -47,6 +57,12 @@ export type SyncStatus = StatusEvent['name'] | 'STARTING';
 
 export interface WalletState {
   status: SyncStatus;
+  /**
+   * True once this wallet has been fully synced on this phone (now or in an
+   * earlier session, from the saved balance). Until then, after a restore,
+   * the history is still filling in, newest blocks first.
+   */
+  everSynced: boolean;
   /** 0–100 */
   scanProgress: number;
   /** Latest block of the network, 0 until the engine reports it. */
@@ -67,10 +83,13 @@ export interface WalletState {
   /** Per pool, as last reported by the engine; null until it reports. */
   pools: PoolBalances | null;
   error: string | null;
+  /** The wallet did not start (e.g. Face ID cancelled): offer Try again. */
+  startFailed: boolean;
 }
 
 const initialState: WalletState = {
   status: 'STARTING',
+  everSynced: false,
   scanProgress: 0,
   networkHeight: 0,
   totalZatoshi: '0',
@@ -83,6 +102,7 @@ const initialState: WalletState = {
   tor: 'off',
   pools: null,
   error: null,
+  startFailed: false,
 };
 
 export interface Wallet extends WalletState {
@@ -108,12 +128,36 @@ export interface Wallet extends WalletState {
   addressUsage: () => Promise<Record<string, number>>;
   /** Moves the public-address funds into the private balance. */
   shieldFunds: () => Promise<string>;
+  /** Starts the wallet again after it failed to start (audit C-49). */
+  retryStart: () => void;
 }
 
 // Starts and stops run strictly one after another, app-wide.
 let queue: Promise<void> = Promise.resolve();
 function enqueue(task: () => Promise<void>): void {
   queue = queue.then(task, task);
+}
+
+/**
+ * Fully up to date. After the first full sync the engine keeps reporting
+ * SYNCED while it catches up, and only the scan progress moves (audit C-50):
+ * a balance seen then is not yet the confirmed one.
+ */
+function settled(s: { status: string; scanProgress: number }): boolean {
+  return s.status === 'SYNCED' && !(s.scanProgress > 0 && s.scanProgress < 100);
+}
+
+// Audit C-23: one release or lock-in at a time, whatever the screen. A
+// second tap while one runs is refused here, before Face ID is asked.
+let releasing = false;
+async function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
+  if (releasing) throw new Error(ALREADY_RELEASING);
+  releasing = true;
+  try {
+    return await task();
+  } finally {
+    releasing = false;
+  }
 }
 
 // True once this app session has opened the wallet database.
@@ -146,10 +190,47 @@ async function startNative(config: InitializerConfig): Promise<Synchronizer> {
       return await makeSynchronizer(config);
     } catch (e) {
       lastError = e;
+      // Not a timing problem: retrying would not help.
+      const code = (e as { code?: string })?.code;
+      if (code === 'SeedRequired' || code === 'WalletMismatch') throw e;
       await wait(700);
     }
   }
   throw lastError;
+}
+
+/**
+ * Starts the engine from the viewing key (self-audit K1). Only when the
+ * engine needs the phrase once (a database migration, or an account that is
+ * not set up on this phone yet) does iOS ask Face ID for it.
+ */
+async function startWallet(
+  config: Omit<InitializerConfig, 'mnemonicSeed'>,
+  wallet: WalletKeys,
+): Promise<Synchronizer> {
+  // Right after creating or restoring, the phrase is handed over once
+  // (audit C-04); it is gone from memory after this call.
+  const firstStart = takeFirstStartSeed();
+  if (firstStart != null) {
+    return startNative({ ...config, mnemonicSeed: firstStart });
+  }
+  try {
+    return await startNative({ ...config, mnemonicSeed: wallet.ufvk });
+  } catch (e) {
+    const code = (e as { code?: string })?.code;
+    if (code !== 'SeedRequired' && code !== 'WalletMismatch') throw e;
+    const seed = await readSeed('Open your Zcash wallet');
+    const started = await startNative({ ...config, mnemonicSeed: seed });
+    if (code === 'WalletMismatch') {
+      // The phrase opened this wallet, so the stored viewing key was only
+      // written differently (a newer engine): keep the one it uses now.
+      const ufvk = await Tools.deriveViewingKey(seed, NETWORK).catch(
+        () => null,
+      );
+      if (ufvk) await updateViewingKey(wallet, ufvk).catch(() => {});
+    }
+    return started;
+  }
 }
 
 function nativeMessage(e: unknown): string {
@@ -167,8 +248,12 @@ function nativeMessage(e: unknown): string {
  * Runs the Zcash light client for one wallet and exposes its live state.
  * `isNew` must be true only the first time a freshly created phrase is used.
  */
-export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
+export function useSynchronizer(wallet: WalletKeys, isNew: boolean): Wallet {
   const [state, setState] = useState<WalletState>(initialState);
+  // Audit C-49: bumping this re-runs the start, e.g. after Face ID was
+  // cancelled at a start that needed the phrase.
+  const [startAttempt, setStartAttempt] = useState(0);
+  const retryStart = useCallback(() => setStartAttempt(n => n + 1), []);
   // The engine's Tor state as last reported, for the release check (N1).
   // When the connection to the server first dropped, until syncing moves.
   const errorSince = useRef<number | null>(null);
@@ -187,8 +272,12 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   useEffect(() => {
     let gone = false;
     loadLastBalance(wallet.birthdayHeight).then(saved => {
-      if (gone || saved == null || liveBalance.current) return;
-      setState(prev => ({ ...prev, ...saved }));
+      if (gone || saved == null) return;
+      if (liveBalance.current) {
+        setState(prev => ({ ...prev, everSynced: true }));
+        return;
+      }
+      setState(prev => ({ ...prev, ...saved, everSynced: true }));
     });
     return () => {
       gone = true;
@@ -255,15 +344,41 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
         // (after a reload, for example). It would keep reporting to the old,
         // dead listeners, so always begin from a fresh one.
         await stopNative();
-        synchronizer = await startNative({
-          networkName: NETWORK,
-          defaultHost: server.host,
-          defaultPort: server.port,
-          mnemonicSeed: wallet.mnemonic,
-          alias: WALLET_ALIAS,
-          birthdayHeight: wallet.birthdayHeight,
-          newWallet: isNew && !startedBefore,
-        });
+        // Audit C-25: with Tor wanted, the engine brings Tor up before its
+        // first sync pass instead of after it.
+        const bridge = NativeModules.RNZcash;
+        // Audit C-49: a restored wallet starts in the SDK's restore mode.
+        if (typeof bridge?.setRestoreAtStart === 'function') {
+          await bridge
+            .setRestoreAtStart(hasFirstStartSeed() && !isNew)
+            .catch(() => {});
+        }
+        // Audit C-42: ask the linked engine itself whether it knows NU7; an
+        // engine that does not is paused like any pre-NU7 engine.
+        if (typeof bridge?.engineKnowsNu7 === 'function') {
+          setEngineKnowsNu7(
+            await bridge.engineKnowsNu7().then(
+              (v: unknown) => v === true,
+              () => null,
+            ),
+          );
+        }
+        if (typeof bridge?.setTorAtStart === 'function') {
+          await bridge
+            .setTorAtStart(torForServer(getTorWanted(), getServer()))
+            .catch(() => {});
+        }
+        synchronizer = await startWallet(
+          {
+            networkName: NETWORK,
+            defaultHost: server.host,
+            defaultPort: server.port,
+            alias: WALLET_ALIAS,
+            birthdayHeight: wallet.birthdayHeight,
+            newWallet: isNew && !startedBefore,
+          },
+          wallet,
+        );
         startedBefore = true;
         if (cancelled) return;
         live.current = synchronizer;
@@ -308,13 +423,18 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
               },
             };
             setState(prev =>
-              prev.status !== 'SYNCED' &&
+              !settled(prev) &&
               BigInt(next.totalZatoshi) < BigInt(prev.totalZatoshi)
                 ? { ...prev, pools }
                 : { ...prev, ...next, pools },
             );
           },
           onStatusChanged: status => {
+            if (status.name === 'DISCONNECTED') {
+              recordSyncProblem(
+                `Lost the connection to ${serverLabel(getServer())}`,
+              );
+            }
             // Reaching the network again clears an earlier connection error.
             patch(
               status.name === 'SYNCED' || status.name === 'SYNCING'
@@ -357,6 +477,7 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
             }),
           onError: error => {
             const text = friendlyError(error.message);
+            recordSyncProblem(text);
             if (text === SYNC_DROPPED) {
               // Keeps dropping for a few minutes: suggest another server.
               const now = Date.now();
@@ -384,7 +505,7 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
           transparentAddress: addresses.transparentAddress,
         });
       } catch (e) {
-        patch({ error: friendlyError(nativeMessage(e)) });
+        patch({ error: friendlyError(nativeMessage(e)), startFailed: true });
       }
     });
 
@@ -401,24 +522,27 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
       });
     };
   }, [
-    wallet.mnemonic,
+    wallet,
     wallet.birthdayHeight,
     isNew,
     server.host,
     server.port,
     applyTor,
+    startAttempt,
   ]);
 
   // Remember the balance whenever it changes while fully synced.
   const {
     status,
+    scanProgress,
     totalZatoshi,
     availableZatoshi,
     spendableZatoshi,
     transparentZatoshi,
   } = state;
   useEffect(() => {
-    if (status !== 'SYNCED' || !liveBalance.current) return;
+    if (!settled({ status, scanProgress }) || !liveBalance.current) return;
+    setState(prev => (prev.everSynced ? prev : { ...prev, everSynced: true }));
     saveLastBalance(wallet.birthdayHeight, {
       totalZatoshi,
       availableZatoshi,
@@ -427,6 +551,7 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
     });
   }, [
     status,
+    scanProgress,
     totalZatoshi,
     availableZatoshi,
     spendableZatoshi,
@@ -453,9 +578,41 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   const spendable = state.spendableZatoshi;
   const proposeMax = useCallback<Wallet['proposeMax']>(
     async ({ toAddress, memo }) => {
-      // The fee depends on how many notes the payment uses, so it can't be
-      // known up front. Start from the minimum fee and adjust until the
-      // amount plus the fee the SDK quotes is exactly the spendable balance.
+      // Audit C-15: the engine's own send-max proposal, when this build has
+      // it: librustzcash works out the fee once, and the amount shown is the
+      // one in the payment request the engine built.
+      const bridge = NativeModules.RNZcash;
+      if (typeof bridge?.proposeSendMax === 'function') {
+        if (live.current == null)
+          throw new Error('The wallet is still starting');
+        let result: ProposalSuccess & { transactionRequest?: string };
+        try {
+          result = await bridge.proposeSendMax(
+            WALLET_ALIAS,
+            toAddress,
+            memo ?? '',
+          );
+        } catch (e) {
+          throw new Error(friendlyError(nativeMessage(e)));
+        }
+        const zatoshi = amountInRequest(result.transactionRequest ?? '');
+        if (zatoshi == null) {
+          throw new Error(
+            'Zecky could not read the amount of this payment. Nothing was sent; type the amount instead of Max.',
+          );
+        }
+        return {
+          proposal: {
+            proposalBase64: result.proposalBase64,
+            transactionCount: result.transactionCount,
+            totalFee: result.totalFee,
+          },
+          zatoshi,
+        };
+      }
+      // Older builds: the fee depends on how many notes the payment uses, so
+      // start from the minimum fee and adjust until amount plus quoted fee is
+      // exactly the spendable balance.
       const total = BigInt(spendable);
       let fee = 10_000n;
       let best: { proposal: ProposalSuccess; zatoshi: string } | null = null;
@@ -486,69 +643,34 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
   );
 
   const sendProposal = useCallback<Wallet['sendProposal']>(
-    async proposalBase64 => {
-      if (live.current == null) throw new Error('The wallet is still starting');
-      // NU7: the engine in this build cannot make transactions the network
-      // accepts after the upgrade, so nothing is built at all.
-      if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
-      if (torBlocksRelease(getTorWanted(), torStatus.current)) {
-        throw new Error(TOR_NOT_READY);
-      }
-      // Offline, nothing is created at all.
-      if (!(await isOnline())) throw new Error(OFFLINE_SEND);
-      const current = getServer();
-      if (isHomeNode(current) && !(await canReachHomeNode(current))) {
-        throw new Error(HOME_NODE_SEND);
-      }
-      // Keys to the lock ④: with a security key added, releasing asks a
-      // tap of one of them. Checked here, right before the transfer is
-      // made, so no screen can skip it. Throws SecurityKeyError.
-      if ((await loadSecurityKeyState()).keys.length > 0) {
-        await checkSecurityKey();
-        // Waiting for the tap can take a while: check again that nothing
-        // changed in between (re-check R7).
-        if (live.current == null) {
-          throw new Error('The wallet is still starting');
-        }
-        if (torBlocksRelease(getTorWanted(), torStatus.current)) {
-          throw new Error(TOR_NOT_READY);
-        }
-        if (!sameServer(getServer(), current)) {
-          throw new Error(SERVER_CHANGED_SEND);
-        }
-      }
-      let result;
-      try {
-        result = await live.current.createTransfer({
-          mnemonicSeed: wallet.mnemonic,
-          proposalBase64,
-        });
-      } catch (e) {
-        // Created but not delivered: the engine retries it by itself, so
-        // the person must not send it again.
-        const code = (e as { code?: string })?.code;
-        const message = nativeMessage(e);
-        const ids = txIdsFrom(message);
-        if (
-          code === 'SubmitPending' ||
-          code === 'SubmitRejected' ||
-          ids.length
-        ) {
-          recordSent(ids, true);
-          throw paymentSavedError(
-            code === 'SubmitRejected' ? SEND_REJECTED : SEND_PENDING,
-            detailFrom(message),
-          );
-        }
-        throw new Error(friendlyError(message));
-      }
-      if (typeof result !== 'string') {
-        throw new Error(result.errorMessage ?? 'The transaction failed');
-      }
-      recordSent([result], false);
-      return result;
-    },
-    [wallet.mnemonic],
+    proposalBase64 =>
+      oneAtATime(() =>
+        release(proposalBase64, {
+          walletLive: () => live.current != null,
+          hasGrant: hasReleaseGrant,
+          nu7Paused: () => nu7Pauses(heightNow.current),
+          torBlocks: () => torBlocksRelease(getTorWanted(), torStatus.current),
+          isOnline,
+          server: getServer,
+          canReachHomeNode,
+          hasSecurityKeys: async () =>
+            (await loadSecurityKeyState()).keys.length > 0,
+          checkSecurityKey,
+          readSeed,
+          createTransfer: (seed, proposal) => {
+            if (live.current == null) {
+              return Promise.reject(new Error('The wallet is still starting'));
+            }
+            return live.current.createTransfer({
+              mnemonicSeed: seed,
+              proposalBase64: proposal,
+            });
+          },
+          recordSent,
+          nativeMessage,
+        }),
+      ),
+    [],
   );
 
   const newShieldedAddress = useCallback<
@@ -579,25 +701,41 @@ export function useSynchronizer(wallet: StoredWallet, isNew: boolean): Wallet {
     }
   }, []);
 
-  const shieldFunds = useCallback<Wallet['shieldFunds']>(async () => {
-    if (live.current == null) throw new Error('The wallet is still starting');
-    if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
-    if (torBlocksRelease(getTorWanted(), torStatus.current)) {
-      throw new Error(TOR_NOT_READY);
-    }
-    try {
-      return await live.current.shieldFunds({
-        seed: wallet.mnemonic,
-        memo: '',
-        threshold: '10000',
-      });
-    } catch (e) {
-      throw new Error(friendlyError(nativeMessage(e)));
-    }
-  }, [wallet.mnemonic]);
+  const shieldFunds = useCallback<Wallet['shieldFunds']>(
+    () =>
+      oneAtATime(async () => {
+        if (live.current == null)
+          throw new Error('The wallet is still starting');
+        if (nu7Pauses(heightNow.current)) throw new Error(NU7_PAUSED);
+        if (torBlocksRelease(getTorWanted(), torStatus.current)) {
+          throw new Error(TOR_NOT_READY);
+        }
+        let seed: string;
+        try {
+          seed = await readSeed('Lock in your Zcash');
+        } catch (e) {
+          if (e instanceof SeedMissingError)
+            throw new Error(SEED_MISSING_LOCK_IN);
+          throw new Error(SEED_NOT_RELEASED_LOCK_IN);
+        }
+        if (live.current == null)
+          throw new Error('The wallet is still starting');
+        try {
+          return await live.current.shieldFunds({
+            seed,
+            memo: '',
+            threshold: '10000',
+          });
+        } catch (e) {
+          throw new Error(friendlyError(nativeMessage(e)));
+        }
+      }),
+    [],
+  );
 
   return {
     ...state,
+    retryStart,
     proposeTransfer,
     proposeMax,
     sendProposal,

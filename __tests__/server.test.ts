@@ -99,3 +99,11 @@ test('reads the Rock it wallet server QR (Tailscale HTTPS address)', () => {
   });
   expect(parseServer('zcash:u1abc')).toBeNull();
 });
+
+test('a home-node address with leading zeros is not private (C-27)', () => {
+  for (const host of ['010.0.0.1', '172.016.0.1', '192.168.01.1', '00.0.0.0']) {
+    expect(isHomeNode({ host, port: 443 })).toBe(false);
+  }
+  expect(isHomeNode({ host: '10.0.0.1', port: 443 })).toBe(true);
+  expect(isHomeNode({ host: '192.168.0.10', port: 443 })).toBe(true);
+});

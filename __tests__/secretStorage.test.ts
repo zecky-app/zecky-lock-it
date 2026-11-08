@@ -1,11 +1,18 @@
 // How secrets are stored: always on this device only, never synced.
 const mockCalls: { service?: string; options: Record<string, unknown> }[] = [];
+let mockPasscode = true;
 jest.mock('react-native-keychain', () => ({
   ACCESSIBLE: {
     WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WhenUnlockedThisDeviceOnly',
     WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 'WhenPasscodeSetThisDeviceOnly',
   },
-  ACCESS_CONTROL: { USER_PRESENCE: 'UserPresence' },
+  ACCESS_CONTROL: {
+    USER_PRESENCE: 'UserPresence',
+    BIOMETRY_ANY_OR_DEVICE_PASSCODE: 'BiometryAnyOrDevicePasscode',
+  },
+  isPasscodeAuthAvailable: jest.fn(async () => mockPasscode),
+  hasGenericPassword: jest.fn(async () => false),
+  resetGenericPassword: jest.fn(async () => true),
   setGenericPassword: jest.fn(
     async (_u: string, _p: string, options: Record<string, unknown>) => {
       mockCalls.push({ service: options.service as string, options });
@@ -24,12 +31,47 @@ const fs = jest.requireActual<{
   readdirSync: (path: string, options: { recursive: boolean }) => string[];
 }>('fs');
 
-test('the recovery phrase is saved for this device only, while unlocked', async () => {
-  await saveWallet({ mnemonic: 'test words', birthdayHeight: 1 });
-  const call = mockCalls.find(c => c.service === 'app.zecky.lockit.seed');
-  expect(call?.options.accessible).toBe('WhenUnlockedThisDeviceOnly');
-  expect(call?.options).not.toHaveProperty('synchronizable');
-  expect(call?.options).not.toHaveProperty('cloudSync');
+test('the recovery phrase is guarded by the Secure Enclave (self-audit K1)', async () => {
+  mockCalls.length = 0;
+  mockPasscode = true;
+  const keys = await saveWallet(
+    { mnemonic: 'test words', birthdayHeight: 1 },
+    'uview1test',
+  );
+  const seed = mockCalls.find(
+    c => c.service === 'app.zecky.lockit.seedguarded',
+  );
+  expect(seed?.options.accessible).toBe('WhenPasscodeSetThisDeviceOnly');
+  expect(seed?.options.accessControl).toBe('BiometryAnyOrDevicePasscode');
+  expect(seed?.options).not.toHaveProperty('synchronizable');
+  expect(keys.guarded).toBe(true);
+  // The item read at every start holds the viewing key, never the phrase.
+  const wallet = mockCalls.find(c => c.service === 'app.zecky.lockit.wallet');
+  expect(wallet?.options.accessible).toBe('WhenUnlockedThisDeviceOnly');
+  expect(wallet?.options).not.toHaveProperty('accessControl');
+});
+
+test('without an iPhone passcode it is stored as before, and says so', async () => {
+  mockCalls.length = 0;
+  mockPasscode = false;
+  const keys = await saveWallet(
+    { mnemonic: 'test words', birthdayHeight: 1 },
+    'uview1test',
+  );
+  const seed = mockCalls.find(
+    c => c.service === 'app.zecky.lockit.seedguarded',
+  );
+  expect(seed?.options.accessible).toBe('WhenUnlockedThisDeviceOnly');
+  expect(keys.guarded).toBe(false);
+});
+
+test('the wallet screen never gets the phrase from storage', () => {
+  const sync = fs.readFileSync('src/wallet/useSynchronizer.ts', 'utf8');
+  // Starting from the viewing key; the phrase only via readSeed (Face ID).
+  expect(sync).toContain('mnemonicSeed: wallet.ufvk');
+  expect(sync).not.toMatch(/loadWallet\(/);
+  const app = fs.readFileSync('App.tsx', 'utf8');
+  expect(app).toContain('loadKeys()');
 });
 
 test('every Keychain write in the app is this-device-only', () => {

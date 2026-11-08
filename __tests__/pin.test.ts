@@ -38,7 +38,7 @@ test('lockout grows after five misses and is capped', () => {
   expect(lockoutSeconds(4)).toBe(0);
   expect(lockoutSeconds(5)).toBe(30);
   expect(lockoutSeconds(6)).toBe(60);
-  expect(lockoutSeconds(30)).toBe(900);
+  expect(lockoutSeconds(30)).toBe(3600);
 });
 
 test('set, verify, lock out, clear', async () => {
@@ -53,4 +53,11 @@ test('set, verify, lock out, clear', async () => {
   await clearPin();
   expect(await loadPinState()).toBe(false);
   expect(secondsUntilRetry()).toBe(0);
+});
+
+test('two checks at once: the second is refused, not counted twice (C-46)', async () => {
+  await clearPin();
+  await setPin('4821');
+  const [a, b] = await Promise.all([verifyPin('4821'), verifyPin('4821')]);
+  expect([a, b].filter(Boolean).length).toBe(1);
 });

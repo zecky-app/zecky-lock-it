@@ -29,13 +29,19 @@ interface Props {
   unit: Unit;
   hidden: boolean;
   onClose: () => void;
+  /** Audit C-22: start a new payment like an expired one. */
+  onSendAgain?: (tx: Transaction) => void;
 }
 
 const FILTERS = ['All', 'Received', 'Sent'] as const;
 type Filter = (typeof FILTERS)[number];
 
-/** "OCTOBER 2026", or WAITING for payments not in a block yet. */
+/**
+ * "OCTOBER 2026", WAITING for payments not in a block yet, or EXPIRED for
+ * those that will never be (audit C-22: they sat under WAITING).
+ */
 function monthOf(tx: Transaction): string {
+  if (tx.isExpired) return 'EXPIRED';
   if (tx.minedHeight <= 0 || tx.blockTimeInSeconds <= 0) return 'WAITING';
   return new Date(tx.blockTimeInSeconds * 1000)
     .toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
@@ -52,6 +58,7 @@ export function ActivityScreen({
   unit,
   hidden,
   onClose,
+  onSendAgain,
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
@@ -111,6 +118,19 @@ export function ActivityScreen({
             <ScrollView contentContainerStyle={styles.scroll}>
               <TransactionDetails tx={open} />
             </ScrollView>
+            {onSendAgain != null &&
+              open.isExpired &&
+              txKind(open) === 'sent' &&
+              open.toAddress != null &&
+              open.toAddress !== '' && (
+                <>
+                  <Button
+                    label="Send again"
+                    onPress={() => onSendAgain(open)}
+                  />
+                  <View style={styles.gap} />
+                </>
+              )}
             <Button
               label="Share or copy transaction ID"
               variant="quiet"
@@ -132,10 +152,10 @@ export function ActivityScreen({
             {transactions.length === 0 ? (
               <View style={styles.emptyBox}>
                 <ZeckyLock open={false} size={90} />
-                <Text style={styles.emptyTitle}>Nothing locked yet</Text>
+                <Text style={styles.emptyTitle}>Nothing here yet</Text>
                 <Text style={styles.empty}>
-                  When Zcash arrives at your address, it shows up
-                  here.
+                  Tap Receive on the main screen for your address. Every payment
+                  in and out shows up here.
                 </Text>
               </View>
             ) : (

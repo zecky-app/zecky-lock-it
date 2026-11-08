@@ -4,6 +4,8 @@ import { clearSent } from './sentLog';
 import { resetServers } from './server';
 import { resetDisplaySettings } from './settings';
 import { resetTor } from './tor';
+import { resetTour } from './tour';
+import { resetMoment } from './holding';
 import { resetThemeMode } from '../theme';
 
 /**
@@ -22,4 +24,6 @@ export function resetAllSettings(): void {
   resetOpenWait();
   resetAskWhen();
   clearSent();
+  resetTour();
+  resetMoment();
 }

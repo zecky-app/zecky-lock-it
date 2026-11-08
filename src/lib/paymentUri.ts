@@ -33,6 +33,33 @@ export function parseScanned(text: string): ScannedPayment | null {
 }
 
 /**
+ * Audit C-20: what is wrong with a ZIP 321 request, if anything, so it is
+ * refused with a reason instead of half-read. ZIP 321 says a wallet must not
+ * pay a request with a `req-` parameter it does not understand, and an
+ * amount that cannot be read must not be dropped silently.
+ */
+export function paymentUriProblem(
+  text: string,
+): 'required' | 'amount' | 'duplicate' | null {
+  const trimmed = text.trim();
+  if (!/^zcash:/i.test(trimmed)) return null;
+  const query = trimmed.split('?')[1] ?? '';
+  const seen = new Set<string>();
+  for (const pair of query.split('&')) {
+    if (pair === '') continue;
+    const [rawKey, value = ''] = pair.split('=');
+    const key = rawKey.toLowerCase();
+    if (key.startsWith('req-')) return 'required';
+    if (seen.has(key)) return 'duplicate';
+    seen.add(key);
+    if (key === 'amount' && parseZec(value.replace(',', 'x')) == null) {
+      return 'amount';
+    }
+  }
+  return null;
+}
+
+/**
  * Self-audit F4: a ZIP 321 request can name several recipients (address.1,
  * amount.1 …). Zecky pays one recipient at a time, so such a request is
  * refused instead of silently paying only the first.
@@ -51,4 +78,23 @@ export function buildPaymentUri(address: string, zatoshi?: string): string {
   if (zatoshi == null) return `zcash:${address}`;
   const amount = formatZec(zatoshi, 0).replace(/,/g, '');
   return `zcash:${address}?amount=${amount}`;
+}
+
+/**
+ * Audit C-15: the amount of a one-recipient ZIP 321 request the engine built
+ * (for Max), in zatoshi; null when it is missing or there is more than one.
+ */
+export function amountInRequest(uri: string): string | null {
+  const query = uri.split('?')[1] ?? '';
+  const amounts = query
+    .split('&')
+    .map(part => part.split('='))
+    .filter(([key]) => key === 'amount' || key.startsWith('amount.'));
+  if (amounts.length !== 1) return null;
+  const value = decodeURIComponent(amounts[0][1] ?? '');
+  if (!/^\d+(\.\d{1,8})?$/.test(value)) return null;
+  const [whole, fraction = ''] = value.split('.');
+  const zatoshi =
+    BigInt(whole) * 100_000_000n + BigInt(fraction.padEnd(8, '0'));
+  return zatoshi > 0n ? zatoshi.toString() : null;
 }

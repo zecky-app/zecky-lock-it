@@ -7,10 +7,31 @@ jest.mock('react-native', () => ({
       Object.assign(mockSettings, values),
   },
 }));
+const mockKeychain: Record<string, { password: string; options: unknown }> = {};
+jest.mock('react-native-keychain', () => ({
+  ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WhenUnlockedThisDeviceOnly' },
+  getGenericPassword: async (o: { service: string }) =>
+    mockKeychain[o.service]
+      ? { username: 'sent', password: mockKeychain[o.service].password }
+      : false,
+  setGenericPassword: async (
+    _u: string,
+    password: string,
+    options: { service: string },
+  ) => {
+    mockKeychain[options.service] = { password, options };
+    return true;
+  },
+  resetGenericPassword: async (o: { service: string }) => {
+    delete mockKeychain[o.service];
+    return true;
+  },
+}));
 
 import type { Transaction } from 'react-native-zcash';
 import {
   clearSent,
+  loadSentLog,
   pruneSent,
   recordSent,
   sentEntry,
@@ -55,4 +76,24 @@ test('the engine reason is kept for Release saved (N6)', () => {
   );
   expect(detailFrom('txids:ab12')).toBeNull();
   expect(detailFrom('Failed to spend')).toBeNull();
+});
+
+test('the log lives in the Keychain, and an old settings copy is moved out (C-29)', async () => {
+  clearSent();
+  mockSettings['zecky.sent'] = JSON.stringify({
+    old1: { at: 5, waiting: true },
+  });
+  await loadSentLog();
+  expect(sentEntry('old1')?.waiting).toBe(true);
+  expect(mockSettings['zecky.sent']).toBeNull();
+  const stored = mockKeychain['app.zecky.lockit.sent'];
+  expect(JSON.parse(stored.password).old1.at).toBe(5);
+  expect((stored.options as { accessible: string }).accessible).toBe(
+    'WhenUnlockedThisDeviceOnly',
+  );
+  recordSent(['new1'], false);
+  await new Promise<void>(r => setTimeout(r, 0));
+  expect(
+    JSON.parse(mockKeychain['app.zecky.lockit.sent'].password).new1,
+  ).toBeTruthy();
 });

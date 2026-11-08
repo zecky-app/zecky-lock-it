@@ -2,7 +2,7 @@
 //
 // NU7 (Nov 2026, block 3,543,405): blocks every 25 seconds instead of 75,
 // and transactions must carry NU7's stamp (consensus branch ID). The Zecky
-// engine (zecky-app/zecky-engine v4.0.0-zecky.2, installed by
+// engine (zecky-app/zecky-engine v4.0.0-zecky.3, installed by
 // scripts/fetch-engine.sh) is built on the NU7 releases of the official
 // Zcash core, so it builds NU7 transactions. The pause below only applies
 // when ENGINE_KNOWS_NU7 is false, for an engine that does not know NU7.
@@ -24,10 +24,19 @@ export function blockSeconds(height: number): number {
   return height >= NU7_HEIGHT ? SECONDS_AFTER_NU7 : SECONDS_BEFORE_NU7;
 }
 
+// Audit C-42: what the engine linked into the app answers about itself at
+// start (null until asked, or when this build cannot ask).
+let engineSaysNu7: boolean | null = null;
+
+export function setEngineKnowsNu7(knows: boolean | null): void {
+  engineSaysNu7 = knows;
+}
+
 /** Whether building transactions is paused for NU7 at this network height. */
 export function nu7Pauses(networkHeight: number): boolean {
+  const knows = engineSaysNu7 ?? ENGINE_KNOWS_NU7;
   return (
-    !ENGINE_KNOWS_NU7 &&
+    !knows &&
     networkHeight > 0 &&
     networkHeight >= NU7_HEIGHT - NU7_MARGIN_BLOCKS
   );

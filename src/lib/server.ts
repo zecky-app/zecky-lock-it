@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { Platform, Settings } from 'react-native';
+import * as Keychain from 'react-native-keychain';
 import { LIGHTWALLETD_HOST, LIGHTWALLETD_PORT } from '../config';
 
 /**
@@ -27,6 +28,13 @@ export const SERVER_PRESETS: { label: string; server: Server }[] = [
 
 const KEY = 'zecky.server';
 const SAVED_KEY = 'zecky.savedServers';
+/**
+ * Audit C-29: the chosen server and the saved ones (a home node's address
+ * or the owner's Tailscale name among them) live in a this-device-only
+ * Keychain item. The app settings go into iCloud and computer backups; the
+ * old copy there is moved over once and then replaced by neutral values.
+ */
+const SERVICE = 'app.zecky.lockit.servers';
 
 /** Longest name a saved server can have. */
 export const MAX_SERVER_NAME = 32;
@@ -39,7 +47,9 @@ export const MAX_SERVER_NAME = 32;
  */
 export function isHomeNode(server: Server): boolean {
   const parts = server.host.split('.');
-  if (parts.length !== 4 || !parts.every(p => /^\d{1,3}$/.test(p))) {
+  // Audit C-27: no leading zeros ("010" can be read as octal by the
+  // system resolver and point at a public address).
+  if (parts.length !== 4 || !parts.every(p => /^(0|[1-9]\d{0,2})$/.test(p))) {
     return false;
   }
   const numbers = parts.map(Number);
@@ -157,23 +167,84 @@ function loadSaved(): SavedServer[] {
 let saved: SavedServer[] | null = null;
 const savedListeners = new Set<() => void>();
 
-function storeSaved(list: SavedServer[]): void {
-  saved = list;
+function savedJson(list: SavedServer[]): string {
+  return JSON.stringify(
+    list.map(s => ({ name: s.name, address: serverLabel(s), own: s.own })),
+  );
+}
+
+/** Writes the chosen and saved servers to the Keychain item. */
+async function persistServers(): Promise<void> {
   try {
-    if (Platform.OS === 'ios') {
-      Settings.set({
-        [SAVED_KEY]: JSON.stringify(
-          list.map(s => ({
-            name: s.name,
-            address: serverLabel(s),
-            own: s.own,
-          })),
-        ),
-      });
+    await Keychain.setGenericPassword(
+      'servers',
+      JSON.stringify({
+        server: serverLabel(getServer()),
+        saved: savedJson(getSavedServers()),
+      }),
+      {
+        service: SERVICE,
+        accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      },
+    );
+  } catch {
+    // Kept in memory until the app is closed.
+  }
+}
+
+/** Call once at startup, before the wallet opens. */
+export async function loadServers(): Promise<void> {
+  let found = false;
+  try {
+    const entry = await Keychain.getGenericPassword({ service: SERVICE });
+    if (entry) {
+      const raw = JSON.parse(entry.password) as {
+        server?: unknown;
+        saved?: unknown;
+      };
+      current =
+        (typeof raw.server === 'string' ? parseServer(raw.server) : null) ??
+        DEFAULT_SERVER;
+      saved = parseSavedServers(raw.saved);
+      found = true;
     }
   } catch {
-    // Kept until the app is closed.
+    // Fall back to the old settings copy below.
   }
+  if (!found) {
+    // Builds before the audit kept these in the app settings.
+    current = load();
+    saved = loadSaved();
+    const anything = !sameServer(current, DEFAULT_SERVER) || saved.length > 0;
+    if (anything) await persistServers();
+  }
+  try {
+    if (Platform.OS === 'ios') {
+      const old = Settings.get(SAVED_KEY);
+      const oldServer = Settings.get(KEY);
+      if (
+        (typeof old === 'string' && old !== '[]') ||
+        (typeof oldServer === 'string' &&
+          oldServer !== serverLabel(DEFAULT_SERVER))
+      ) {
+        // Written out as values: clearing a setting with null does not
+        // reliably reach the iOS settings store.
+        Settings.set({
+          [KEY]: serverLabel(DEFAULT_SERVER),
+          [SAVED_KEY]: JSON.stringify([]),
+        });
+      }
+    }
+  } catch {
+    // Tried again at the next start.
+  }
+  listeners.forEach(listener => listener());
+  savedListeners.forEach(listener => listener());
+}
+
+function storeSaved(list: SavedServer[]): void {
+  saved = list;
+  persistServers();
   savedListeners.forEach(listener => listener());
 }
 
@@ -271,11 +342,7 @@ export function getServer(): Server {
 
 export function setServer(server: Server): void {
   current = sameServer(server, DEFAULT_SERVER) ? DEFAULT_SERVER : server;
-  try {
-    if (Platform.OS === 'ios') Settings.set({ [KEY]: serverLabel(current) });
-  } catch {
-    // Applies until the app is closed.
-  }
+  persistServers();
   listeners.forEach(listener => listener());
 }
 
@@ -283,6 +350,7 @@ export function setServer(server: Server): void {
 export function resetServers(): void {
   current = DEFAULT_SERVER;
   saved = [];
+  Keychain.resetGenericPassword({ service: SERVICE }).catch(() => false);
   try {
     // Written out as values: clearing a setting with null does not reliably
     // reach the iOS settings store.

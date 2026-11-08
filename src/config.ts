@@ -31,3 +31,9 @@ export const PRICE_URL =
   'https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=' +
   CURRENCIES.join(',').toLowerCase();
 export const PRICE_REFRESH_MS = 5 * 60 * 1000;
+
+/**
+ * Audit C-38: opened in Safari only when tapped in Settings › About. The
+ * app itself never contacts these sites.
+ */
+export const PRIVACY_URL = 'https://zecky.app/privacy';

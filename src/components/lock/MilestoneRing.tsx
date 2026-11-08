@@ -7,6 +7,8 @@ interface Props {
   /** 0 to 1, towards the next milestone. */
   progress: number;
   diameter?: number;
+  /** The day a milestone is reached: a soft glow along the arc. */
+  glow?: boolean;
 }
 
 // Room around the ring for the glow of the tip.
@@ -16,7 +18,11 @@ const PAD = 10;
  * A thin gold ring around the lock that fills towards the next milestone,
  * with a glowing tip like the hand of a clock and fine tick marks.
  */
-export function MilestoneRing({ progress, diameter = 300 }: Props) {
+export function MilestoneRing({
+  progress,
+  diameter = 300,
+  glow = false,
+}: Props) {
   const colors = useColors();
   const p = Math.max(0.004, Math.min(1, progress));
   const r = diameter / 2;
@@ -65,6 +71,20 @@ export function MilestoneRing({ progress, diameter = 300 }: Props) {
           strokeWidth={2}
         />
         <G rotation={-90} origin={`${c}, ${c}`}>
+          {/* On a milestone day only, a wider, softer copy: the glow. */}
+          {glow && (
+            <Circle
+              cx={c}
+              cy={c}
+              r={r}
+              fill="none"
+              stroke={colors.gold}
+              strokeOpacity={0.12}
+              strokeWidth={16}
+              strokeLinecap="round"
+              strokeDasharray={[circumference * p, circumference]}
+            />
+          )}
           {/* A soft wide copy under the arc stands in for its glow. */}
           <Circle
             cx={c}

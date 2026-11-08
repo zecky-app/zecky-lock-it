@@ -1,3 +1,4 @@
+import { fitMemo, MEMO_MAX_BYTES, memoBytes } from '../lib/memo';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
@@ -31,7 +32,11 @@ import { NETWORK } from '../config';
 import type { Currency } from '../config';
 import { addContact, contactName, useContacts } from '../lib/contacts';
 import { NU7_PAUSED, isPaymentSaved, savedDetail } from '../lib/errors';
-import { isMultiRecipient, parseScanned } from '../lib/paymentUri';
+import {
+  isMultiRecipient,
+  parseScanned,
+  paymentUriProblem,
+} from '../lib/paymentUri';
 import { waitingPayments } from '../lib/sentLog';
 import { isOwnAddress } from '../lib/transactions';
 import { torBlocksRelease, useTorWanted } from '../lib/tor';
@@ -49,6 +54,7 @@ import {
   parseAmount,
   shortenAddress,
   toEditable,
+  ambiguousZec,
 } from '../lib/zec';
 import { fonts, makeStyles, space, useColors } from '../theme';
 import type { Wallet } from '../wallet/useSynchronizer';
@@ -65,6 +71,11 @@ interface Props {
   /** A payment was broadcast: its id and the amount the receiver gets. */
   onSent: (txId: string, zatoshi: string) => void;
   onClose: () => void;
+  /**
+   * Audit C-22: "Send again" for an expired payment fills in its address
+   * and note; the amount is typed again and shown on the receipt.
+   */
+  prefill?: { address: string; memo: string } | null;
 }
 
 interface Review {
@@ -92,6 +103,7 @@ export function SendScreen({
   price,
   onSent,
   onClose,
+  prefill,
 }: Props) {
   const colors = useColors();
   const styles = useStyles();
@@ -132,20 +144,20 @@ export function SendScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Start clean every time the sheet opens.
+  // Start clean every time the sheet opens (or from "Send again").
   useEffect(() => {
     if (visible) {
       setStep({ name: 'form' });
-      setAddress('');
+      setAddress(prefill?.address ?? '');
       setAmount('');
-      setMemo('');
+      setMemo(prefill?.memo ?? '');
       setMax(false);
-      setNoteOpen(false);
+      setNoteOpen((prefill?.memo ?? '') !== '');
       setFiatMode(false);
       setBusy(false);
       setError(null);
     }
-  }, [visible]);
+  }, [visible, prefill]);
 
   const transparent = isTransparentAddress(address);
 
@@ -171,8 +183,18 @@ export function SendScreen({
   const onScanned = (text: string) => {
     // The camera can report the same code several times in a row.
     if (step.name !== 'scan') return;
-    const scanned = isMultiRecipient(text) ? null : parseScanned(text);
-    if (isMultiRecipient(text)) {
+    const problem = paymentUriProblem(text);
+    const scanned =
+      isMultiRecipient(text) || problem != null ? null : parseScanned(text);
+    if (problem != null) {
+      setError(
+        problem === 'required'
+          ? 'This payment request asks for something Zecky does not support, so nothing was filled in. Ask for a plain address or a simpler request.'
+          : problem === 'amount'
+          ? 'The amount in this payment request cannot be read, so nothing was filled in. Ask the receiver for a new code.'
+          : 'This payment request names something twice, so it is unclear what to pay. Nothing was filled in.',
+      );
+    } else if (isMultiRecipient(text)) {
       setError(
         'This payment request asks to pay several people at once. Zecky sends to one address at a time, so nothing was filled in.',
       );
@@ -181,8 +203,14 @@ export function SendScreen({
     } else {
       setError(null);
       setAddress(scanned.address);
+      // Audit C-14: a scanned code is a new payment. Nothing from the last
+      // one carries over (the fee choice, the note), and a scanned amount is
+      // always in ZEC, so it is never read as dollars.
+      setFeeIncluded(false);
+      setMemo('');
       if (scanned.zatoshi != null) {
         setMax(false);
+        setFiatMode(false);
         setAmount(toEditable(scanned.zatoshi, unit));
       }
     }
@@ -226,6 +254,20 @@ export function SendScreen({
     const toAddress = address.trim();
     const typed = max ? null : parseTyped(amount);
     if (toAddress === '') return setError('Enter the address to send to.');
+    if (
+      !max &&
+      typed == null &&
+      fiat == null &&
+      unit === 'ZEC' &&
+      ambiguousZec(amount)
+    ) {
+      const [whole, part] = amount.trim().split(',');
+      return setError(
+        `Is that ${whole}.${
+          part.replace(/0+$/, '') || '0'
+        } ZEC or ${whole}${part} ZEC? Type ${whole}.${part} or ${whole}${part}.`,
+      );
+    }
     if (!max && typed == null) {
       return setError(
         fiat != null
@@ -401,6 +443,15 @@ export function SendScreen({
                       : 'Taken out of the lock. Everything else stays locked.'
                   }
                 />
+                {BigInt(wallet.totalZatoshi) === 0n && (
+                  <View style={[plate, styles.emptyPlate]}>
+                    <Text style={styles.emptyTitle}>Nothing to send yet</Text>
+                    <Text style={styles.emptyText}>
+                      Receive Zcash first. It can be sent about 4 minutes after
+                      it arrives.
+                    </Text>
+                  </View>
+                )}
                 {waiting > 0 && (
                   <Text style={[styles.error, styles.noTop]}>
                     {waiting === 1
@@ -461,8 +512,8 @@ export function SendScreen({
                   )}
                   {transparent && (
                     <Text style={styles.warnLine}>
-                      Transparent address: the amount and both addresses will be
-                      public.
+                      Transparent address: the amount and the recipient’s
+                      address will be public.
                     </Text>
                   )}
 
@@ -582,14 +633,20 @@ export function SendScreen({
                       <TextInput
                         style={styles.noteInput}
                         value={memo}
-                        onChangeText={setMemo}
+                        onChangeText={text => setMemo(fitMemo(text))}
                         multiline
-                        maxLength={500}
                         autoFocus={memo === ''}
                         placeholder="Only the receiver can read this"
                         placeholderTextColor={colors.goldDim}
                         selectionColor={colors.gold}
                       />
+                      {MEMO_MAX_BYTES - memoBytes(memo) < 60 && (
+                        <Text style={styles.fieldLabel}>
+                          {`Room for about ${
+                            MEMO_MAX_BYTES - memoBytes(memo)
+                          } more letters`}
+                        </Text>
+                      )}
                     </>
                   )}
                 </View>
@@ -1018,6 +1075,20 @@ const useStyles = makeStyles(colors => ({
   },
   // A fixed height: iOS sizes a text field once, sometimes before the
   // serif font is ready, and then clips the top of the large digits.
+  emptyPlate: { alignItems: 'center', marginBottom: space.md },
+  emptyTitle: {
+    fontFamily: fonts.serifMedium,
+    fontSize: 19,
+    color: colors.text,
+  },
+  emptyText: {
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: 4,
+  },
   feeRow: {
     flexDirection: 'row',
     alignItems: 'center',

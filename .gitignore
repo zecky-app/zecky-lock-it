@@ -78,3 +78,6 @@ yarn-error.log
 build.log
 /vendor/
 build-*.log
+
+# Sapling parameters (50 MB), fetched by scripts/fetch-sapling-params.sh
+ios/Zecky/SaplingParams/*.params

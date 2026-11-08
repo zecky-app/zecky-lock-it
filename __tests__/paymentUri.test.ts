@@ -34,3 +34,29 @@ test('requests for several recipients are recognised (F4)', () => {
   expect(isMultiRecipient(`zcash:${addr}?amount=1.5&memo=abc`)).toBe(false);
   expect(isMultiRecipient(addr)).toBe(false);
 });
+
+test('Max reads the amount from the request the engine built (C-15)', () => {
+  const { amountInRequest } = jest.requireActual('../src/lib/paymentUri');
+  expect(amountInRequest('zcash:u1abc?amount=0.0039')).toBe('390000');
+  expect(amountInRequest('zcash:?address=u1abc&amount=1.5&memo=x')).toBe(
+    '150000000',
+  );
+  expect(amountInRequest('zcash:u1abc')).toBeNull();
+  expect(
+    amountInRequest('zcash:?address.1=a&amount.1=1&address.2=b&amount.2=2'),
+  ).toBeNull();
+  expect(amountInRequest('zcash:u1abc?amount=1.123456789')).toBeNull();
+});
+
+test('a request Zecky cannot fully honour is refused with a reason (C-20)', () => {
+  const { paymentUriProblem } = jest.requireActual('../src/lib/paymentUri');
+  const a = 'u1' + 'x'.repeat(40);
+  expect(paymentUriProblem(`zcash:${a}?amount=1.5`)).toBeNull();
+  expect(paymentUriProblem(`zcash:${a}?amount=1.5&req-futurething=1`)).toBe(
+    'required',
+  );
+  expect(paymentUriProblem(`zcash:${a}?amount=1,5`)).toBe('amount');
+  expect(paymentUriProblem(`zcash:${a}?amount=abc`)).toBe('amount');
+  expect(paymentUriProblem(`zcash:${a}?amount=1&amount=2`)).toBe('duplicate');
+  expect(paymentUriProblem(a)).toBeNull();
+});

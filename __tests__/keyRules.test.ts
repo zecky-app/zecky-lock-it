@@ -81,13 +81,14 @@ test('releasing asks the security key right before the transfer is made', () => 
   const fs = jest.requireActual<{
     readFileSync: (path: string, encoding: string) => string;
   }>('fs');
-  const text = fs.readFileSync('src/wallet/useSynchronizer.ts', 'utf8');
-  const from = text.indexOf('const sendProposal = useCallback');
-  const body = text.slice(from, text.indexOf('const shieldFunds', from));
-  const check = body.indexOf('await checkSecurityKey()');
-  const transfer = body.indexOf('createTransfer(');
+  // Tripwire; the behaviour itself is tested in release.test.ts (C-36).
+  const body = fs.readFileSync('src/wallet/release.ts', 'utf8');
+  const check = body.indexOf('await d.checkSecurityKey()');
+  const transfer = body.indexOf('d.createTransfer(');
   expect(check).toBeGreaterThan(0);
   expect(transfer).toBeGreaterThan(check);
+  const text = fs.readFileSync('src/wallet/useSynchronizer.ts', 'utf8');
+  expect(text).toMatch(/oneAtATime\(\(\) =>\s*release\(proposalBase64/);
   // Locking in from the public address is not a release and asks no key.
   const shield = text.slice(text.indexOf('const shieldFunds'));
   expect(shield.slice(0, shield.indexOf('useCallback', 30))).not.toContain(
@@ -132,12 +133,10 @@ test('after the key tap, Tor and the server are checked again (R7)', () => {
   const fs = jest.requireActual<{
     readFileSync: (path: string, encoding: string) => string;
   }>('fs');
-  const text = fs.readFileSync('src/wallet/useSynchronizer.ts', 'utf8');
-  const from = text.indexOf('await checkSecurityKey()');
-  const transfer = text.indexOf('createTransfer(', from);
+  const text = fs.readFileSync('src/wallet/release.ts', 'utf8');
+  const from = text.indexOf('await d.checkSecurityKey()');
+  const transfer = text.indexOf('d.createTransfer(', from);
   const between = text.slice(from, transfer);
-  expect(between).toContain(
-    'torBlocksRelease(getTorWanted(), torStatus.current)',
-  );
-  expect(between).toContain('sameServer(getServer(), current)');
+  expect(between).toContain('d.torBlocks()');
+  expect(between).toContain('sameServer(d.server(), current)');
 });

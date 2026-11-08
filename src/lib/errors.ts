@@ -7,6 +7,8 @@ export const SYNC_DROPPED_LONG =
 
 // Turns the Zcash engine's technical error text into a sentence that says
 // what happened and what to do. Unknown errors pass through unchanged.
+const GENERAL_SEND_FAILURE = /failed to spend|submit|not attempted|rejected/i;
+
 const RULES: [RegExp, string][] = [
   [
     // A block download or server call that broke off while syncing, such as
@@ -16,8 +18,10 @@ const RULES: [RegExp, string][] = [
     SYNC_DROPPED,
   ],
   [
+    // Never "delete the app": deleting Zecky removes the phrase from the
+    // Keychain on the next install (audit C-37).
     /belongs to another wallet/i,
-    'This device still holds data from an earlier wallet. Delete the Zecky app, install it again, and your wallet will open cleanly.',
+    'This iPhone still holds wallet data from another recovery phrase. Make sure you have your 24 words on paper, then use Settings › Security › Erase wallet and restore from them. Do not delete the app first.',
   ],
   [
     // Engine (ZIP 316 revision 2): the recipient's address has an expiry
@@ -56,14 +60,66 @@ const RULES: [RegExp, string][] = [
     'The wallet could not start. Close Zecky completely and open it again.',
   ],
   [
-    /failed to spend|submit|not attempted|rejected/i,
+    GENERAL_SEND_FAILURE,
     'The payment could not be completed. Check Activity before trying again: if it is listed there, it will still be sent.',
   ],
 ];
 
+/** Engine, database or network internals rather than a sentence for people. */
+const TECHNICAL =
+  /::|[{}]|\b[a-z]+_[a-z_]+\b|0x[0-9a-f]{4,}|\b(rust|ffi|sqlite|grpc|tonic|nserror|errsec|panicked|unwrap|zcasherror)\b|error domain|status code/i;
+
+/**
+ * The app's own messages, passed through as written: the rules above are
+ * for engine text and could otherwise rewrite them (HOME_NODE_SEND was
+ * shown as "Cannot reach the Zcash network"). errorTexts.test.ts fails when
+ * a new exported message is missing here.
+ */
+function ownMessages(): Set<string> {
+  return new Set([
+    SYNC_DROPPED,
+    SYNC_DROPPED_LONG,
+    SERVER_CHANGED_SEND,
+    SEED_NOT_RELEASED,
+    SEED_NOT_RELEASED_LOCK_IN,
+    ALREADY_RELEASING,
+    LOCK_NOT_OPEN,
+    SEED_MISSING,
+    SEED_MISSING_LOCK_IN,
+    NU7_PAUSED,
+    TOR_NOT_READY,
+    OFFLINE_SEND,
+    SEND_PENDING,
+    SEND_REJECTED,
+    HOME_NODE_SEND,
+  ]);
+}
+
 export function friendlyError(message: string): string {
+  if (ownMessages().has(message)) return message;
   for (const [pattern, text] of RULES) {
-    if (pattern.test(message)) return text;
+    if (!pattern.test(message)) continue;
+    // The general "could not be completed" rule keeps the engine's own
+    // reason, so a failure can be traced. "Failed to spend" also covers
+    // errors after the payment was built, so it never says nothing was sent.
+    if (pattern === GENERAL_SEND_FAILURE) {
+      const detail = /^Failed to spend:\s*([\s\S]+)/i
+        .exec(message.trim())?.[1]
+        ?.trim();
+      if (detail) {
+        const short =
+          detail.length > 200 ? `${detail.slice(0, 197).trimEnd()}…` : detail;
+        return `${text} Detail: ${short}`;
+      }
+    }
+    return text;
+  }
+  // Audit C-43: an unknown engine error gets a plain first sentence; the
+  // detail stays visible (nothing hidden), shortened.
+  if (TECHNICAL.test(message)) {
+    const detail =
+      message.length > 160 ? `${message.slice(0, 157).trimEnd()}…` : message;
+    return `Something went wrong inside the Zcash engine. Nothing was changed by this message; try again in a moment. Detail: ${detail}`;
   }
   return message;
 }
@@ -74,13 +130,28 @@ export function describeError(e: unknown): string {
 
 export const SERVER_CHANGED_SEND =
   'The server changed while you were tapping your key. Nothing was sent. Try again.';
+export const SEED_NOT_RELEASED =
+  'Face ID or the passcode was cancelled, so nothing was sent.';
+export const SEED_NOT_RELEASED_LOCK_IN =
+  'Face ID or the passcode was cancelled, so nothing was locked in.';
+/** Audit C-23: a second release or lock-in while one is running. */
+export const ALREADY_RELEASING =
+  'One moment: Zecky is still finishing the last one.';
+/** Audit C-09: a release asked for while the lock is closed. */
+export const LOCK_NOT_OPEN =
+  'The lock closed before the payment went out, so nothing was sent. Open the lock and try again.';
+/** Audit C-01: iOS removes the guarded phrase when the passcode is turned off. */
+export const SEED_MISSING =
+  'The recovery phrase is no longer on this iPhone, so nothing was sent. iOS removes it when the iPhone passcode is turned off. Your Zcash is safe: restore from your 24 words.';
+export const SEED_MISSING_LOCK_IN =
+  'The recovery phrase is no longer on this iPhone, so nothing was locked in. iOS removes it when the iPhone passcode is turned off. Your Zcash is safe: restore from your 24 words.';
 export const NU7_PAUSED =
   'Sending is paused for the Zcash network upgrade (NU7) until Zecky is updated. Your Zcash is safe, and you can still receive.';
 export const TOR_NOT_READY =
   'Tor is not connected yet, so nothing was sent. Wait until Tor is on, or switch Tor off under Settings › Network.';
 export const OFFLINE_SEND = 'No internet connection. Nothing was sent.';
 export const SEND_PENDING =
-  'It could not be delivered to the Zcash network yet. Zecky keeps trying by itself every few minutes. Do not send it again.';
+  'It could not be delivered to the Zcash network yet. Zecky keeps trying by itself every few minutes while it is open. Keep Zecky open until Activity shows it sent, and do not send it again.';
 export const SEND_REJECTED =
   'The network has not accepted this payment yet. Zecky keeps trying for about 50 minutes. If it is still not accepted, it is cancelled and nothing leaves the lock. Do not send it again.';
 

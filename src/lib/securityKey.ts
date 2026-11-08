@@ -1,3 +1,4 @@
+import { getServer, sameServer, SERVER_PRESETS } from './server';
 import { useSyncExternalStore } from 'react';
 import { NativeModules } from 'react-native';
 import * as Keychain from 'react-native-keychain';
@@ -23,6 +24,20 @@ import {
 // checked on the phone against the public key saved when pairing.
 
 const SERVICE = 'app.zecky.lockit.seckeys';
+
+/** Whether Zecky is on one of its built-in public servers (audit C-28). */
+export function onPublicServer(): boolean {
+  const current = getServer();
+  return SERVER_PRESETS.some(p => sameServer(p.server, current));
+}
+/**
+ * The highest synced height, in its own item (audit C-06): it changes on
+ * every synced block, and rewriting the key list that often would risk
+ * losing it (the Keychain library deletes before it adds). The item also
+ * marks that keys were set up: if it exists but the key list is gone, Zecky
+ * fails closed instead of sending without a key.
+ */
+const HEIGHT_SERVICE = 'app.zecky.lockit.seckeysheight';
 
 export type KeyRole = 'main' | 'backup';
 
@@ -144,12 +159,50 @@ function parse(text: string): KeysState {
 
 const UNREADABLE =
   'Zecky could not read your security keys. Nothing was shown or sent. Close Zecky and open it again; if it stays like this, restore from your 24 words.';
+const MISSING =
+  'Your security keys were set up on this iPhone but their record is gone. Nothing was sent. Close Zecky and open it again; if it stays like this, restore from your 24 words.';
+
+function parseHeight(text: string): number {
+  try {
+    const raw = JSON.parse(text) as { heightSeen?: unknown };
+    return typeof raw?.heightSeen === 'number' ? raw.heightSeen : 0;
+  } catch {
+    return 0;
+  }
+}
 
 /** Call once at startup. */
 export async function loadSecurityKeyState(): Promise<KeysState> {
-  const entry = await Keychain.getGenericPassword({ service: SERVICE });
-  publish(entry ? parse(entry.password) : EMPTY);
+  const [entry, marker] = await Promise.all([
+    Keychain.getGenericPassword({ service: SERVICE }),
+    Keychain.getGenericPassword({ service: HEIGHT_SERVICE }),
+  ]);
+  if (!entry) {
+    // Keys were set up (the marker is there) but the list is gone: never
+    // treat that as "no keys" (audit C-06).
+    if (marker) throw new KeysUnreadableError(MISSING);
+    publish(EMPTY);
+    return state;
+  }
+  const parsed = parse(entry.password);
+  const heightSeen = Math.max(
+    parsed.heightSeen,
+    marker ? parseHeight(marker.password) : 0,
+  );
+  publish({ ...parsed, heightSeen });
   return state;
+}
+
+async function saveHeight(heightSeen: number): Promise<void> {
+  const result = await Keychain.setGenericPassword(
+    'height',
+    JSON.stringify({ heightSeen }),
+    {
+      service: HEIGHT_SERVICE,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    },
+  );
+  if (!result) throw new Error('The security key could not be saved.');
 }
 
 export function getSecurityKeyState(): KeysState {
@@ -173,9 +226,14 @@ export async function loadSecurityKeys(): Promise<SecurityKey[]> {
 async function save(next: KeysState): Promise<void> {
   if (next.keys.length === 0) {
     await Keychain.resetGenericPassword({ service: SERVICE });
+    await Keychain.resetGenericPassword({ service: HEIGHT_SERVICE }).catch(
+      () => false,
+    );
     publish(EMPTY);
     return;
   }
+  // The marker first, so a key list is never found without it.
+  if (state.keys.length === 0) await saveHeight(next.heightSeen);
   const result = await Keychain.setGenericPassword(
     'keys',
     JSON.stringify(next),
@@ -190,6 +248,9 @@ async function save(next: KeysState): Promise<void> {
 
 export async function clearSecurityKeys(): Promise<void> {
   await Keychain.resetGenericPassword({ service: SERVICE }).catch(() => false);
+  await Keychain.resetGenericPassword({ service: HEIGHT_SERVICE }).catch(
+    () => false,
+  );
   publish(EMPTY);
 }
 
@@ -331,7 +392,9 @@ export async function setPhraseNeedsKey(on: boolean): Promise<void> {
  */
 export async function noteSyncedHeight(height: number): Promise<void> {
   if (state.keys.length === 0 || !(height > state.heightSeen)) return;
-  await save({ ...state, heightSeen: height });
+  // Only the small height item is rewritten, never the key list (C-06).
+  await saveHeight(height);
+  publish({ ...state, heightSeen: height });
 }
 
 /**
@@ -385,6 +448,11 @@ export async function finishKeyRemovalIfDue(
   syncedHeight: number,
 ): Promise<boolean> {
   if (!removalDue(state.removal, Date.now(), syncedHeight)) return false;
+  // Audit C-28: the block height comes from the server. A server of one's
+  // own could report blocks that do not exist and, with the clock moved
+  // forward, end the 48 hours at once. The removal therefore only finishes
+  // on one of the built-in public servers, reached over TLS.
+  if (!onPublicServer()) return false;
   await clearSecurityKeys();
   return true;
 }

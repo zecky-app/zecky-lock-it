@@ -11,6 +11,8 @@ import { BackupScreen } from './src/screens/BackupScreen';
 import { ConfirmPhraseScreen } from './src/screens/ConfirmPhraseScreen';
 import { loadPhraseState, setPhraseUnconfirmed } from './src/lib/phraseCheck';
 import { loadPinState, usePinEnabled } from './src/lib/pin';
+import { loadSentLog } from './src/lib/sentLog';
+import { loadServers } from './src/lib/server';
 import { loadSecurityKeyState } from './src/lib/securityKey';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LockScreen } from './src/screens/LockScreen';
@@ -18,22 +20,70 @@ import { RestoreScreen } from './src/screens/RestoreScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
 import { WelcomeScreen } from './src/screens/WelcomeScreen';
 import { makeStyles, useIsDark } from './src/theme';
+import { NETWORK } from './src/config';
+import { ErrorScreen } from './src/screens/ErrorScreen';
 import {
   createMnemonic,
-  loadWallet,
+  dropFirstStartSeed,
+  guardIfPossible,
+  hasOldWallet,
+  legacyWalletKeys,
+  loadWalletKeys,
+  migrateOldWallet,
   saveWallet,
+  seedPresent,
+  stashFirstStartSeed,
   StoredWallet,
+  WalletKeys,
 } from './src/wallet/seed';
 
 type Stage =
   | { name: 'loading' }
   | { name: 'welcome' }
+  /** The wallet could not be read at start: retry, never Welcome (C-02). */
+  | { name: 'error'; message: string }
   | { name: 'restore' }
   | { name: 'backup'; wallet: StoredWallet }
   | { name: 'confirm'; wallet: StoredWallet }
-  | { name: 'home'; wallet: StoredWallet; isNew: boolean };
+  | { name: 'home'; wallet: WalletKeys; isNew: boolean };
 
 const SPLASH_MS = 2000;
+
+/** The viewing key for a phrase, from the Zcash engine. */
+const deriveUfvk = (mnemonic: string) =>
+  Tools.deriveViewingKey(mnemonic, NETWORK);
+
+/**
+ * The wallet's keys for syncing. An install from before build 20 first
+ * moves its phrase into the Secure Enclave (one Face ID); if that is
+ * cancelled, this session uses the old item and the move is tried again at
+ * the next start.
+ */
+async function loadKeys(): Promise<WalletKeys | null> {
+  const keys = await loadWalletKeys();
+  if (keys != null) {
+    // An interrupted move left the unguarded copy behind: finish it (one
+    // Face ID), or keep going with what is there.
+    if (await hasOldWallet()) {
+      try {
+        return await migrateOldWallet(deriveUfvk, keys);
+      } catch {
+        return keys;
+      }
+    }
+    const guarded = await guardIfPossible(keys).catch(() => keys);
+    // Audit C-01: iOS removes the guarded item when the iPhone passcode is
+    // turned off. Say so, instead of a cancelled-looking Face ID at Send.
+    if (!(await seedPresent())) return { ...guarded, seedMissing: true };
+    return guarded;
+  }
+  if (!(await hasOldWallet())) return null;
+  try {
+    return await migrateOldWallet(deriveUfvk);
+  } catch {
+    return legacyWalletKeys(deriveUfvk);
+  }
+}
 
 function describe(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -68,19 +118,25 @@ function App() {
   // Startup: show the opening screen for at least two seconds while the
   // wallet and the app-code setting are read from the Keychain. On the first
   // start after an install, leftovers from an earlier install go first.
-  useEffect(() => {
+  // Anything that cannot be read lands on an error screen with Retry: never
+  // on Welcome, where Create or Restore could replace the wallet (C-02), and
+  // never with the Zecky code counted as "not set" (C-05).
+  const start = useCallback((splash: boolean) => {
+    setStage({ name: 'loading' });
     const minimum = new Promise<void>(resolve =>
-      setTimeout(resolve, SPLASH_MS),
+      setTimeout(resolve, splash ? SPLASH_MS : 0),
     );
     clearIfFreshInstall()
       .catch(() => false)
       .then(() =>
         Promise.all([
-          loadWallet(),
-          loadPinState().catch(() => false),
+          loadKeys(),
+          loadPinState(),
           minimum,
           loadPhraseState(),
           loadSecurityKeyState().catch(() => null),
+          loadSentLog(),
+          loadServers(),
         ]),
       )
       .then(([wallet, hasPin]) => {
@@ -92,11 +148,11 @@ function App() {
         );
       })
       .catch(e => {
-        setError(describe(e));
-        setLocked(false);
-        setStage({ name: 'welcome' });
+        setLocked(true);
+        setStage({ name: 'error', message: describe(e) });
       });
   }, []);
+  useEffect(() => start(true), [start]);
 
   // Lock again whenever the app is sent to the background.
   useEffect(() => {
@@ -131,9 +187,14 @@ function App() {
     setBusy(true);
     setError(null);
     try {
-      await saveWallet(wallet);
-      setStage({ name: 'home', wallet, isNew });
+      const keys = await saveWallet(wallet, await deriveUfvk(wallet.mnemonic));
+      // The engine needs the phrase once to set up the account. It is
+      // handed over once, outside React state (C-04); every later start
+      // syncs with the viewing key only.
+      stashFirstStartSeed(wallet.mnemonic);
+      setStage({ name: 'home', wallet: keys, isNew });
     } catch (e) {
+      dropFirstStartSeed();
       setError(describe(e));
       setStage({ name: 'welcome' });
     } finally {
@@ -146,6 +207,9 @@ function App() {
       <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
       <SafeAreaView style={styles.root}>
         {stage.name === 'loading' && <SplashScreen />}
+        {stage.name === 'error' && (
+          <ErrorScreen message={stage.message} onRetry={() => start(false)} />
+        )}
         {stage.name === 'welcome' && (
           <WelcomeScreen
             onCreate={create}

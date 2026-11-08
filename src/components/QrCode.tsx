@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Text, View } from 'react-native';
+import { PixelRatio, Text, View } from 'react-native';
 import { makeQrMatrix } from '../lib/qr';
 import { fonts, makeStyles } from '../theme';
 import { METAL } from './lock/metal';
@@ -15,7 +15,15 @@ interface Props {
   badge?: boolean;
 }
 
-const QUIET_MODULES = 3;
+// The QR standard asks a quiet zone of 4 modules around the code. Module
+// sizes snap to physical pixels (not whole points), so the leftover margin
+// stays small: about 4 to 6 modules, and the code itself is as large as the
+// card allows.
+const QUIET_MODULES = 4;
+
+/** Light background: dark on light is what every scanner expects. */
+export const QR_PAPER = '#ECE8DF';
+const QR_INK = '#14161C';
 
 /** QR code drawn with plain views, so it needs no native graphics library. */
 export function QrCode({ value, size, badge = false }: Props) {
@@ -24,11 +32,13 @@ export function QrCode({ value, size, badge = false }: Props) {
     () => makeQrMatrix(value, badge ? 'H' : 'M'),
     [value, badge],
   );
-  // Whole-point modules keep the edges crisp; leftover space becomes margin.
-  const cell = Math.max(
-    1,
-    Math.floor(size / (matrix.size + QUIET_MODULES * 2)),
-  );
+  // Whole-pixel modules keep the edges crisp; leftover space becomes margin.
+  const scale = PixelRatio.get();
+  const cell =
+    Math.max(
+      1,
+      Math.floor((size * scale) / (matrix.size + QUIET_MODULES * 2)),
+    ) / scale;
   const inner = cell * matrix.size;
 
   return (
@@ -76,20 +86,21 @@ export function QrCode({ value, size, badge = false }: Props) {
   );
 }
 
-// A QR code is always dark on white, whatever the theme, so it scans.
+// A QR code is always dark on a light paper color, whatever the theme, so
+// it scans.
 const useStyles = makeStyles(() => ({
   frame: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: QR_PAPER,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dark: { position: 'absolute', top: 0, backgroundColor: '#14161C' },
+  dark: { position: 'absolute', top: 0, backgroundColor: QR_INK },
   badge: {
     position: 'absolute',
     backgroundColor: METAL.plateInk,
     borderWidth: 3,
-    borderColor: '#FFFFFF',
+    borderColor: QR_PAPER,
     alignItems: 'center',
     justifyContent: 'center',
   },

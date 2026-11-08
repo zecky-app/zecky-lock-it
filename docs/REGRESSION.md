@@ -7,10 +7,13 @@ small amount and its 24 words and birthday block on paper.
 ## 1. On the Mac
 
 1. Clean install and patch: `npm run setup`
-2. Dependencies: `npm run check:deps` (only the known `braces` advisory)
+2. Dependencies: `npm run check:deps` (fails only on critical; the known build-tooling advisories are listed in CLAUDE.md, anything new is reviewed)
 3. Code checks: `npx tsc --noEmit`, `npx eslint App.tsx src __tests__`, `npx jest`
 4. Build to the iPhone, then confirm the install in `build.log`
 5. Settings shows the new version number
+6. Settings › About › Technical details has no test lines ("Install check",
+   "Keychain items"); add such lines only for a TestFlight test and remove
+   them again before the build is uploaded
 
 ## 2. On the iPhone
 

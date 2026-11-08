@@ -31,9 +31,48 @@ protects, from whom, how, and what it does not try to do.
 
 **Phrase and keys**
 - Generated on the phone from the system's secure random source. Stored only
-  in the iOS Keychain, `WhenUnlockedThisDeviceOnly`: not in iCloud Keychain,
-  not in backups, not readable while the phone is locked.
-- Never sent anywhere, never logged, never put on the clipboard. Only Apple's
+  in the iOS Keychain, this device only: not in iCloud Keychain, not in
+  backups.
+- Self-audit K1 (after the DarkSword exploit, iOS 18.4–18.7, which takes
+  "Keychain-related files" and wallet data): the phrase item has access
+  control `BiometryAnyOrDevicePasscode` with `WhenPasscodeSetThisDeviceOnly`,
+  so the Secure Enclave releases it only after Face ID or the passcode. A
+  copy of the Keychain files cannot decrypt it. It is read only to send, to
+  lock in and to show the phrase, then dropped; it is not kept in memory.
+  Right after creating or restoring, the phrase is handed to the engine
+  once, outside React state, and dropped (audit C-04).
+- Syncing starts from the unified full viewing key, kept in a separate item
+  (`WhenUnlockedThisDeviceOnly`, no access control). If that item is taken,
+  the history and balance are exposed, never spending. The engine asks for the
+  phrase only when a database migration needs it (`SeedRequired`) or the
+  account is not set up yet; then iOS asks Face ID.
+- Installs from before build 20 move the phrase once at the first start: the
+  guarded copy is written and read back (Face ID), then the old item is
+  deleted. If that is cancelled, the old item stays and the move is tried
+  again at the next start.
+- Without an iPhone passcode the Secure Enclave cannot guard the item: it is
+  then stored `WhenUnlockedThisDeviceOnly` as before, Settings › Security
+  says so, and it is guarded at the first start after a passcode is set.
+  Guarding keeps a copy in the old item until the guarded one has been read
+  back, so a failed Keychain write cannot lose the phrase (audit C-03, C-08).
+- Turning the iPhone passcode off makes iOS delete every
+  `WhenPasscodeSetThisDeviceOnly` item, the phrase included (audit C-01).
+  Zecky checks at every start, without a prompt, that the item is still
+  there; when it is gone, Home and Security say so and sending or locking in
+  explains it instead of reporting a cancelled Face ID. The viewing key
+  survives, so the balance still shows. Recovery: erase and restore from the
+  24 words. The alternative class (`WhenUnlockedThisDeviceOnly` with access
+  control) would survive passcode removal but is then unguarded; the
+  deletion is the safer of the two and is stated to the user.
+- A wallet that cannot be read at start (a damaged item, a Keychain error)
+  shows an error screen with Retry, never Welcome: creating or restoring
+  refuses while a wallet is on the phone, so nothing can overwrite it
+  (audit C-02). The same holds when the Zecky code cannot be read (C-05).
+- Settings › Security shows a quiet note on iOS older than 18.7.6 / 26.3.1.
+- Never sent anywhere, never logged, never put on the clipboard. The SDK
+  and the engine write nothing to the iPhone's system log (logging policy
+  `.noLogging`, audit C-11), so txids and engine errors are not logged
+  either. Only Apple's
   keyboard is allowed in the app (third-party keyboards are refused), so
   typing the phrase on restore cannot be recorded by another app.
 - Shown only on request. Guarded by the Zecky code if set, otherwise by Face ID
@@ -61,6 +100,11 @@ protects, from whom, how, and what it does not try to do.
 - Weakening any of this (switching a check off, a shorter wait, turning the
   code off) and choosing a new Zecky code first ask the owner, so someone
   with the unlocked phone cannot quietly lower the guard.
+- App settings (UserDefaults) are part of iCloud and computer backups. They
+  hold the server and saved servers (an own node's address or Tailscale
+  name), the display choices and the choices below; never keys, balances or
+  txids. The list of this phone's own payments (txids and when they were
+  sent) moved from there to a this-device-only Keychain item (audit C-29).
 - These choices are app settings (UserDefaults), deleted with the app and
   reset by Erase. With both checks and the question off, one tap opens the
   lock: the owner's explicit choice.
@@ -88,10 +132,17 @@ protects, from whom, how, and what it does not try to do.
   with the phone and its passcode cannot add their own key or take yours
   away. The first key asks the owner (code or Face ID).
 - "Lost my keys": starts with the owner check and takes effect only after
-  48 hours on both the clock and the Zcash network (2,304 blocks), so
-  setting the date forward alone does not shorten it; a key tap cancels it,
-  and Home shows it while it runs. A malicious server reporting a false
-  height together with a changed clock could shorten it: known limit.
+  48 hours on both the clock and the Zcash network (2,304 blocks before NU7, 6,912 after), so
+  setting the date forward alone does not shorten it; it only finishes on
+  one of the built-in public servers over TLS, so a server of one's own
+  reporting blocks that do not exist cannot shorten it either (audit C-28);
+  a key tap cancels it,
+  and Home shows it while it runs. What remains: the public servers
+  themselves (zec.rocks) are trusted for the height, together with the clock.
+- The security keys' record and the synced-height mark are two items; the
+  mark is written first and rewritten on every synced block instead of the
+  key list. A key list that is gone while the mark exists blocks sending
+  (audit C-06): a failed Keychain write can never switch the keys off.
 - Known griefing path (re-check R10): someone who knows the passcode can
   add the first key (their own) and switch on "ask the key for the phrase",
   blocking the owner's releases and phrase for the 48-hour removal, which
@@ -108,13 +159,17 @@ protects, from whom, how, and what it does not try to do.
 **Zecky code** (called "app code" before 0.0.18)
 - 4 digits, stored only as a salted PBKDF2-SHA256 hash (10,000 rounds) in the
   Keychain. A screen lock, not encryption. After 5 wrong codes, growing waits
-  up to 15 minutes. The counter survives closing and restarting Zecky and
+  up to an hour (audit C-46; it was 15 minutes). The counter survives closing and restarting Zecky and
   does not use the clock, so changing the date does not skip it. Deleting
   the app clears it, together with the wallet itself.
 
 **Funds**
 - Every release shows a receipt first: recipient, amount, fee, total released
-  and what stays locked. Release is only reachable through an open lock.
+  and what stays locked. Release is only reachable through an open lock, and
+  the wallet itself refuses a release without an in-memory grant that exists
+  only while the lock is open (audit C-09), so no screen can skip the lock's
+  checks. The ask-when choices themselves are app settings (see Keys to the
+  lock); changing them asks the owner.
 - Offline, nothing is created. With a home node on mobile data, the node is
   asked first.
 - A payment that was created but not delivered is stored by the engine and
@@ -125,16 +180,21 @@ protects, from whom, how, and what it does not try to do.
   balance says how much is "available in a few minutes".
 
 **Privacy**
-- Lock more shows a shielded unified address, and a fresh never-used one once
+- Receive shows a shielded unified address, and a fresh never-used one once
   the shown one has been paid.
 - Wallet files are excluded from iCloud and computer backups: the whole Documents folder, so files the engine creates later are covered too (self-audit D2).
 - Connections: the light-client server over TLS; a home node (Rock it) on a
   private address without TLS, inside the home network or Tailscale only
-  (exactly four-number private IPv4 ranges qualify). Optional Tor for
+  (exactly four-number private IPv4 addresses qualify, without leading zeros: 10/8, 172.16/12, 192.168/16, 100.64/10 and this phone's own 127/8). Optional Tor for
   releases, payment lookups and the price. While Tor is wanted but not
   connected (starting or failed), releases and lock-ins are refused: the
   engine falls back to a direct connection when Tor cannot start, so going
   ahead would expose the IP address (self-audit N1, 27 Oct 2026).
+  With Tor wanted, the engine brings Tor up before its first sync pass at
+  every start (audit C-25), so lookups and the automatic resend of an
+  unmined payment do not go out directly first. If Tor cannot start, the
+  wallet still syncs and the resend can go direct: known limit, shown as
+  "Tor failed".
 - Tor and the own node (self-audit N6): with Rock it as the server the
   wallet does not use Tor (status "ownNode"), also when Tor is wanted. Tor
   hides the IP address from the server, which is the owner's own here, and a
@@ -145,7 +205,7 @@ protects, from whom, how, and what it does not try to do.
   up to twice, through a fresh circuit (the failed group is dropped); a
   rejection by the server is not retried.
 - NU7 (block 3,543,405, Nov 2026): the engine is the Zecky engine
-  v4.0.0-zecky.2 (docs/ENGINE.md), built on the NU7 releases of the
+  v4.0.0-zecky.3 (docs/ENGINE.md), built on the NU7 releases of the
   official Zcash core, so it builds NU7 transactions (branch ID 0x77190AD9;
   without an explicit expiry a transaction expires 120 blocks after NU7,
   the same time as 40 blocks before). `src/lib/upgrades.ts`
@@ -175,6 +235,10 @@ protects, from whom, how, and what it does not try to do.
   funds). Zecky labels them apart and recommends the Tailscale name. Full
   fix planned: Rock it serves TLS with its own certificate, pinned from its
   QR.
+  Known gap (audit C-26): the QR code itself is not authenticated, so any
+  code with a …ts.net name gets the "own" mark (Tor off for it). How Zecky
+  works says to scan only the code on one's own Rock it. Fix planned with
+  Rock it: a signed code, or its TLS certificate pinned from the code.
 - Notes (memos) are shown as plain text; a note with a link gets a warning.
 
 ## Data flow
@@ -182,11 +246,11 @@ protects, from whom, how, and what it does not try to do.
 ```mermaid
 flowchart LR
   subgraph Phone["iPhone"]
-    K[("Keychain<br/>phrase, Zecky code hash,<br/>security key public keys,<br/>contacts, addresses,<br/>last balance")]
+    K[("Keychain<br/>phrase (Secure Enclave, Face ID),<br/>viewing key, Zecky code hash,<br/>security key public keys,<br/>contacts, addresses,<br/>last balance")]
     A["Zecky app"]
     E["Zcash engine<br/>(Zecky engine, official Zcash core, on device)"]
     D[("Wallet database<br/>history, notes<br/>not backed up")]
-    S[("App settings<br/>server, theme, unit,<br/>send times")]
+    S[("App settings (in backups)<br/>server, saved servers,<br/>theme, unit, choices")]
     A <--> K
     A <--> S
     A <--> E
@@ -212,7 +276,9 @@ What leaves the phone:
 | Rock it node | the same, but to the owner's own node | the same |
 | Price service | a price request and the IP address (none with "None" or Tor) | anything about the wallet |
 | Apple | nothing from Zecky beyond what iOS itself sends; iOS fetches zecky.app's association file through Apple's CDN when the app is installed or updated | |
-| zecky.app | nothing: the app never contacts the website | |
+| download.z.cash | nothing: the Sapling parameters ship inside the app (audit C-24), checked by SHA-1 before every use | |
+| zecky.app, GitHub | nothing: the app never contacts these sites; Settings › About opens the privacy policy and the source code in Safari only when tapped | |
+| download.z.cash | once per install, before the first release or lock-in: a direct download of the Sapling proving parameters (about 50 MB), also with Tor on, so that server sees the IP address and the time (audit C-24, open: bundle or fetch over Tor) | anything about the wallet |
 
 ## Out of scope and known limits
 
@@ -221,7 +287,11 @@ What leaves the phone:
 - The light-client server sees the IP address (without Tor) and when the
   wallet syncs and sends.
 - The Zecky code is not encryption: someone who can read the Keychain does not
-  need it.
+  need it. The phrase itself is guarded by the Secure Enclave (K1), except on
+  an iPhone without a passcode.
+- Face ID or the passcode releases the phrase: someone who knows the iPhone
+  passcode and holds the phone can send. Keys to the lock (a security key)
+  add a check the passcode alone does not pass.
 - Restoring with a birthday later than the first transaction can hide older
   history; the SDK currently rounds birthdays down to its latest checkpoint.
 - Not yet independently audited.

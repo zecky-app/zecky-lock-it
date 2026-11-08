@@ -42,7 +42,7 @@ async function checkServer(server: Server): Promise<void> {
 const TOR_STATUS: Record<TorStatus, string> = {
   off: 'Off. The server sees your internet address.',
   starting: 'Connecting to Tor…',
-  on: 'On. Your internet address stays hidden.',
+  on: 'On. Sending, payment lookups and the price go through Tor; downloading blocks stays direct.',
   failed:
     'Tor could not connect on this network. The wallet is using a direct connection.',
   unavailable: 'Tor is not available in this build of Zecky.',

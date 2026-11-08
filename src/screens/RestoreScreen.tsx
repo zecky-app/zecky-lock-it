@@ -83,6 +83,9 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
   // Self-audit K4: Zcash wallets use 24 words. A valid 12- or 18-word
   // phrase from another coin would open an empty wallet, so ask first.
   const [shortOk, setShortOk] = useState(false);
+  // With no date and no block, the scan starts at the first shielded block
+  // (October 2018) and can take hours. Ask once before doing that.
+  const [fullScanOk, setFullScanOk] = useState(false);
   const submit = async () => {
     if (!isValidMnemonic(phrase)) {
       setError(
@@ -97,6 +100,14 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
       );
       return;
     }
+    const noStart = useBlock ? birthday.trim() === '' : year == null;
+    if (noStart && !fullScanOk) {
+      setFullScanOk(true);
+      setError(
+        'No date picked, so Zecky checks the whole Zcash history since 2018. That can take hours. Pick the year the wallet was made to make it much faster, or tap Restore wallet again to check everything.',
+      );
+      return;
+    }
     let birthdayHeight = EARLIEST_BIRTHDAY_HEIGHT;
     if (useBlock && birthday.trim() !== '') {
       // Accept the number as Zecky shows it (3,533,600) or as written on
@@ -105,6 +116,15 @@ export function RestoreScreen({ onRestore, onBack, busy }: Props) {
       if (!Number.isInteger(parsed) || parsed < EARLIEST_BIRTHDAY_HEIGHT) {
         setError(
           `The block height must be a whole number of ${EARLIEST_BIRTHDAY_HEIGHT} or higher. Leave it empty if you are unsure.`,
+        );
+        return;
+      }
+      // Audit C-48: a block that does not exist yet (often one digit too
+      // many) would scan nothing and show an empty wallet without a word.
+      // The margin covers an estimate that runs a little behind.
+      if (parsed > estimateTipHeight(Date.now()) + 2_000) {
+        setError(
+          'That block has not been made yet: the Zcash network is not that far. Check the number, or leave it empty if you are unsure.',
         );
         return;
       }

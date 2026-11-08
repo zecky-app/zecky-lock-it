@@ -2,6 +2,150 @@
 
 What changed in each version, in plain words. Newest first.
 
+## 0.0.19, build 23 (November 8, 2026)
+- Home: tap "Locked for …" for a new page with the ring, highlights of
+  the current holding (since when, received since then, the stacking pace
+  per day, week or month, payments in, the largest payment in, and the
+  longest earlier stretch when it was longer) and the milestones, each with its own name: Locked (1 week), Sealed,
+  Bolted, Steady, Anchored, Rooted, Unshaken, Hardened, Vaulted, Fortified,
+  Bedrock, Keeper (1 to 11 months), Guardian (1 year), Sentinel, Stronghold
+  and Legend (4 years), then Legend with its years. It shows the last one
+  reached and the next two; a tap shows the whole path to Legend. The first time the page opens on a
+  milestone day, that milestone lights up softly once with one line; no
+  notifications or pop-ups. Amounts follow the eye (hidden stays hidden).
+  Worked out on the phone from the history; only which milestone moment
+  was shown is remembered, and Erase wallet clears it.
+- Home: the line under the balance is now one line, "Locked since today",
+  "Locked for 2 days", "for 3 weeks", "for 4 months", "for 1 year": the
+  largest whole unit only, and no date ("1 week on Nov 12" was read as an
+  unlock date). With an empty lock there is no line. The count starts at the
+  first payment in after the lock was last empty; sends and later payments
+  in never reset it, internal moves (locking in, the Ironwood move) count as
+  nothing. It is worked out from the history alone, so it survives a
+  restore; after a restore it waits until the first sync is done, and when
+  the history does not reach back to the start (restored from a later
+  date) the line says "Locked on this iPhone" instead of a count that is
+  too short. A send's fee was taken twice in that sum, so a send that left
+  about one fee could make the count restart; now it is counted once.
+- Milestones are now 1 week, every month of the first year, 1 year, then
+  every year (100 days and the 5-year end are gone). On a milestone day only, the ring is full and
+  glows softly; no notifications, badges or pop-ups. Open the lock says
+  "locked for" in the same words.
+- Contacts: Scan QR code under the address, so a contact can be added from
+  their Receive code. Only the address is kept (an amount in the code is
+  ignored), and Add still checks it with the Zcash engine.
+- Sync details: the ring now counts every block since the wallet birthday,
+  so after a night closed it starts near the top (for example 99.6%) and
+  moves to 100% instead of jumping from 0. It shows one decimal, glides
+  between readings (not with Reduce Motion), only says 100% when the wallet
+  is up to date, and the line under it says how many new blocks are left.
+- Independent audit (Nov 6), key storage: if the iPhone passcode is turned
+  off, iOS removes the guarded phrase; Zecky now says so on the main screen
+  and under Security instead of a cancelled-looking Face ID at Send, and
+  explains it in How Zecky works. The phrase is never rewritten in place
+  (a copy stays until the new item is read back), creating or restoring
+  refuses while a wallet is on the phone, a wallet that cannot be read at
+  start gets a Try again screen instead of Welcome, the Zecky code never
+  counts as "not set" when it cannot be read, and the phrase is dropped
+  from memory right after the first start. The security keys' synced
+  height is kept in its own item, and a missing key record blocks sending.
+  "Later" on the phrase check now says what it means.
+- Audit, sending: the wallet itself refuses a release unless the lock is
+  open, so no screen can skip the Zecky code or the wait. A scanned payment
+  request always fills in ZEC and starts fresh (no old note or fee choice).
+  "1,500" ZEC and "1.5" zats are refused instead of read as 1.5 and 15. TEX
+  addresses get the transparent warning and no note. A home-node address with
+  leading zeros ("010.0.0.1") is no longer treated as private.
+- Audit, smaller fixes: a private note is measured in bytes, as the network
+  counts it, so emoji and accents can no longer pass the field and then
+  fail; a second tap on Release or Lock in while one runs is refused before
+  Face ID; a typed restore block that does not exist yet is refused; texts
+  about the security key tap, "Lost my keys", undelivered payments (only
+  while Zecky is open) and transparent addresses now say exactly what
+  happens.
+- Activity: payments that expired get their own EXPIRED group instead of
+  sitting under WAITING.
+- Audit, privacy: the chosen and saved servers (a home node or Tailscale
+  name among them) and the sent-payment log are kept in the Keychain on
+  this iPhone only, no longer in the app settings that go into backups;
+  the price request carries no cookies and no app name; the balance is only
+  remembered once Zecky has fully caught up; the Tor status says plainly
+  that blocks are still downloaded directly; a security key's answer from
+  another site is refused; the install script also checks the simulator
+  engine.
+- Settings › About links to the privacy policy (zecky.app/privacy); it
+  opens in Safari only when tapped.
+- Tests: every check a release passes is now tested branch by branch, and
+  the phrase is checked to be stored only in its own Keychain items.
+- Zecky code: each attempt is counted before it is checked, only one check
+  runs at a time, and the wait after repeated misses grows to an hour.
+- If the wallet cannot start (for example Face ID was cancelled), Home
+  offers Try again instead of waiting for a restart.
+- Unknown engine errors start with a plain sentence. Fixed: with Rock it
+  out of reach, sending said "Cannot reach the Zcash network" instead of
+  naming Rock it.
+- Sync details: tap the status line on the main screen. A gold ring with
+  the progress, the network's block and the wallet's, how far behind with a
+  rough time to go, the wallet birthday, a bar of what is checked and what
+  is still to check, the server and connection, and the last few problems
+  (kept in memory only while Zecky is open).
+- Start: no more "No internet connection" for the first seconds after
+  opening Zecky. Until iOS has reported the connection the screen simply
+  waits (sending still counts that moment as offline).
+- About: Ironwood on one line; tap it for the older pools, greyed out, with
+  Transparent marked red. Privacy policy and Acknowledgements sit small
+  under Technical details, which no longer repeats the engine version.
+- Restore: with no date and no block, Zecky first says the scan starts in
+  2018 and can take hours, and asks for the year; tap again to scan it all.
+- Settings › About › Acknowledgements lists the open-source software in the
+  app with its licences, offline (`node scripts/notices.js` regenerates it
+  and THIRD_PARTY_NOTICES.md after any dependency change).
+- Activity: an expired payment has Send again, which fills in its address
+  and note and goes through the lock as usual.
+- If a newer engine writes the viewing key differently, Zecky stores the
+  new one, so the phrase is not asked again at every start.
+- The Sapling parameters are part of the app: nothing is downloaded from
+  download.z.cash before the first release, with or without Tor. The
+  wallet files get the "complete unless open" protection, a restored
+  wallet starts in the SDK's restore mode, and the app asks the engine
+  itself whether it knows NU7 before it sends.
+- Max asks the Zcash engine for the whole spendable balance in one go,
+  fee included, and the receipt shows the exact amount the engine sends.
+- A payment request (QR) that Zecky cannot fully honour (a required
+  parameter it does not know, an unreadable or repeated amount) is refused
+  with the reason instead of being half filled in.
+- Audit, engine connection (needs the next Mac build): no system logging
+  from the SDK or the engine; with Tor on, Tor is up before the first sync
+  instead of after it; the check that the wallet data belongs to this
+  phrase runs before anything is synced; a failed payment-status write is
+  no longer silent; a proposal error, a bad proposal or a lock-in failure
+  can no longer hang or crash the app, and lock-in failures say why;
+  sending treats the phone as offline until iOS has reported a connection.
+- Audit, privacy and keys: the list of this phone's own payments moved from
+  the app settings (which are in iCloud backups) to the Keychain, this
+  device only. "Lost my keys" only finishes on one of Zecky's public
+  servers, so a server of one's own cannot shorten the 48 hours. How Zecky
+  works now says that saved servers are part of backups and that a scanned
+  Tailscale code is trusted as your own Rock it.
+- Your recovery phrase is now guarded by the iPhone's Secure Enclave: iOS
+  releases it only after Face ID or your passcode, when you send, lock in
+  or show it. Syncing uses only the viewing key. The first time you open
+  this build, Zecky moves the phrase there (one Face ID). This protects it
+  against attacks that copy the iPhone's Keychain files, such as DarkSword.
+- Settings › Security says so quietly when the iPhone's iOS is older than
+  the release that fixed DarkSword, or when there is no passcode.
+- A short tour the first time Zecky opens: Receive, tap the lock to send,
+  choose your keys. Skip it any time; replay it from How Zecky works.
+- Keys to the lock: a small ⓘ on each key explains in one line what it is
+  for.
+- Calm empty states: Activity, Send and Security key say what to do first.
+- How Zecky works is a quiet link at the bottom of Settings and under
+  Keys to the lock.
+- Receive: a larger QR code in the same card, on paper color, with the
+  standard quiet margin around it.
+- The main screen shows a payment on its way calmly: "Receiving +0.0099
+  ZEC" or "Sending −0.001 ZEC", with the details one tap away.
+
 ## 0.0.19, build 19 (November 6, 2026)
 - Ready for NU7: Zecky's Zcash engine is updated to the official Zcash core
   for NU7, so sending and locking in work again.
