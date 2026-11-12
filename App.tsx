@@ -19,6 +19,8 @@ import { LockScreen } from './src/screens/LockScreen';
 import { RestoreScreen } from './src/screens/RestoreScreen';
 import { SplashScreen } from './src/screens/SplashScreen';
 import { WelcomeScreen } from './src/screens/WelcomeScreen';
+import { TermsScreen } from './src/screens/TermsScreen';
+import { useTermsAccepted } from './src/lib/terms';
 import { makeStyles, useIsDark } from './src/theme';
 import { NETWORK } from './src/config';
 import { ErrorScreen } from './src/screens/ErrorScreen';
@@ -162,6 +164,12 @@ function App() {
     return () => listener.remove();
   }, []);
   const showLock = askAtStart && locked && stage.name === 'home';
+  // "Before you start": over whatever is on screen until the current terms
+  // version is accepted, so before Create or Restore, and once for wallets
+  // that existed before it. The app lock stays on top of it.
+  const termsOk = useTermsAccepted();
+  const showTerms =
+    !termsOk && stage.name !== 'loading' && stage.name !== 'error';
 
   const create = useCallback(async () => {
     setBusy(true);
@@ -266,6 +274,7 @@ function App() {
             }}
           />
         )}
+        {showTerms && <TermsScreen />}
         {showLock && (
           <LockScreen withCode={pinEnabled} onUnlock={() => setLocked(false)} />
         )}

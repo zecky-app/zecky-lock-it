@@ -2,7 +2,26 @@
 
 What changed in each version, in plain words. Newest first.
 
-## 0.0.19, build 23 (November 8, 2026)
+## 0.0.19 (24), November 12, 2026
+- Fewer traces of the build Mac inside the app: the C libraries (BoringSSL
+  and others) no longer carry the builder's folder paths in their error
+  messages. The Swift libraries still do; that follows in a next build.
+- "Before you start": one quiet screen before creating or restoring a
+  wallet (and once for wallets that already exist), with four points about
+  the 24 words, final payments, testing and keys, links to the terms and
+  privacy policy, and I understand. It comes back only when the terms
+  version changes. Only the accepted version and the day are kept, on this
+  phone; Erase wallet keeps them. Settings › About gains Terms and Privacy
+  policy rows (opened in Safari); the privacy link moved there from
+  Technical details.
+- A new or restored wallet starts scanning near its birthday again. The
+  bundled chain checkpoints ended at block 3,500,000, so a wallet made
+  today scanned about 51,000 blocks it did not need. They now reach
+  3,550,000 on mainnet and 4,590,000 on testnet: the same files as Zecky
+  engine 4.0.0-zecky.5, fetched with the Zcash SDK's own tool and checked
+  against an independent node.
+
+## 0.0.19 (23), November 8, 2026
 - Home: tap "Locked for …" for a new page with the ring, highlights of
   the current holding (since when, received since then, the stacking pace
   per day, week or month, payments in, the largest payment in, and the

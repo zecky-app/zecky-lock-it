@@ -33,7 +33,8 @@ export const PRICE_URL =
 export const PRICE_REFRESH_MS = 5 * 60 * 1000;
 
 /**
- * Audit C-38: opened in Safari only when tapped in Settings › About. The
- * app itself never contacts these sites.
+ * Audit C-38: opened in Safari only when tapped ("Before you start" and
+ * Settings › About). The app itself never contacts these sites.
  */
-export const PRIVACY_URL = 'https://zecky.app/privacy';
+export const PRIVACY_URL = 'https://zecky.app/privacy.html';
+export const TERMS_URL = 'https://zecky.app/terms.html';

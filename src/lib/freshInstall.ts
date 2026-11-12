@@ -32,6 +32,7 @@ export const SETTINGS_KEYS = [
   'zecky.ask.openLock',
   'zecky.tour.seen',
   'zecky.milestone.seen',
+  'zecky.terms.accepted',
   'zecky.installcheck',
 ];
 

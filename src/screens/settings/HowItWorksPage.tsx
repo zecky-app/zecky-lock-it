@@ -157,6 +157,7 @@ const CHAPTERS: {
       'The recovery phrase is in the phone’s Keychain behind the Secure Enclave (Face ID or passcode). The viewing key, the Zecky code, your security keys’ public keys, your contacts, your receive addresses and your last known balance are in the Keychain too, on this device only.',
       'Settings › Security shows a quiet note when the iPhone’s iOS is older than the release that fixed the DarkSword attack.',
       'Your history is kept in a database on this phone. For a payment that isn’t confirmed yet, the time it was sent is kept until it is.',
+      'When you tap I understand on “Before you start”, Zecky keeps which version of the terms you accepted and the day, in its settings on this phone. It is never sent, and the screen only comes back when the terms change. The terms and privacy policy are under Settings › About, and open in Safari.',
       'Only Apple’s own keyboard works inside Zecky, so a keyboard from another app can’t record what you type.',
       'Notes on payments show as plain text, and a note with a link gets a warning.',
       'iOS keeps an app’s secure storage after the app is deleted, so a new install of Zecky first removes what an earlier one left, the recovery phrase included. Erase wallet removes it without deleting the app, and resets every setting, servers included.',

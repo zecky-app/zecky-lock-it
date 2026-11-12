@@ -25,7 +25,13 @@ import { Icon, IconName } from '../components/Icon';
 import { BirthdayNote } from '../components/BirthdayNote';
 import { PhraseGrid } from '../components/PhraseGrid';
 import { PinPad } from '../components/PinPad';
-import { CURRENCIES, Currency, NETWORK, PRIVACY_URL } from '../config';
+import {
+  CURRENCIES,
+  Currency,
+  NETWORK,
+  PRIVACY_URL,
+  TERMS_URL,
+} from '../config';
 import { about } from '../lib/about';
 import { NU7_HEIGHT, blockSeconds } from '../lib/upgrades';
 import { recommendedIosUpdate } from '../lib/iosVersion';
@@ -784,6 +790,20 @@ export function SettingsScreen({
                     last
                   />
                 </View>
+                {/* Opened in Safari: the app itself never contacts zecky.app. */}
+                <View style={styles.card}>
+                  <MenuRow
+                    label="Terms"
+                    value=""
+                    onPress={() => Linking.openURL(TERMS_URL).catch(() => {})}
+                  />
+                  <MenuRow
+                    label="Privacy policy"
+                    value=""
+                    onPress={() => Linking.openURL(PRIVACY_URL).catch(() => {})}
+                    last
+                  />
+                </View>
                 <Text style={styles.section}>Your Zcash by pool</Text>
                 <View style={styles.card}>
                   {POOLS.filter(
@@ -884,17 +904,6 @@ export function SettingsScreen({
                 )}
                 {detailsOpen && (
                   <View style={styles.smallLinks}>
-                    <Pressable
-                      accessibilityRole="link"
-                      accessibilityHint="Opens in Safari"
-                      hitSlop={8}
-                      onPress={() =>
-                        Linking.openURL(PRIVACY_URL).catch(() => {})
-                      }
-                    >
-                      <Text style={styles.smallLink}>Privacy policy</Text>
-                    </Pressable>
-                    <Text style={styles.smallDot}>·</Text>
                     <Pressable
                       accessibilityRole="button"
                       hitSlop={8}
@@ -1929,12 +1938,6 @@ const useStyles = makeStyles(colors => ({
     marginTop: space.md,
   },
   smallLink: { fontFamily: fonts.sans, fontSize: 12.5, color: colors.goldDim },
-  smallDot: {
-    fontFamily: fonts.sans,
-    fontSize: 12.5,
-    color: colors.textMuted,
-    marginHorizontal: space.sm,
-  },
   poolSub: {
     fontFamily: fonts.sans,
     fontSize: 11.5,

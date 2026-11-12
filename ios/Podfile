@@ -53,6 +53,27 @@ target 'Zecky' do
       end
     end
 
+    # Keep the builder's folders out of the app. Swift's #file and C's
+    # __FILE__ (in error messages of BoringSSL, SwiftNIO, gRPC and the
+    # Zcash bridge) would otherwise put full paths like /Users/<name>/... into
+    # the app binary. The project folder is rewritten to "." at compile time.
+    # The path is worked out here and only lands in the generated Pods
+    # project, which is not committed.
+    project_root = File.expand_path('..', __dir__)
+    add_flags = lambda do |settings, key, flags|
+      current = settings[key] || ['$(inherited)']
+      current = current.split(' ') if current.is_a?(String)
+      settings[key] = current + flags
+    end
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        add_flags.call(config.build_settings, 'OTHER_SWIFT_FLAGS',
+                       ['-file-prefix-map', "#{project_root}=."])
+        add_flags.call(config.build_settings, 'OTHER_CFLAGS',
+                       ["-ffile-prefix-map=#{project_root}=."])
+      end
+    end
+
     # Audit C-35: refuse downloaded pods whose code differs from ios/Pods.sha256.
     check = File.expand_path('../scripts/check-pods.sh', __dir__)
     unless system('bash', check)
