@@ -31,6 +31,7 @@ const CHAPTERS: {
       'The open lock closes again after sending, after two minutes, or when you leave Zecky.',
       'The line under your balance says how long your Zcash has been in the lock: “Locked for 3 weeks”. It counts everything in the lock, shielded and transparent alike, so it stays true if some Zcash is still waiting to be locked in. It is never a date, and nothing unlocks on a date: you open the lock yourself whenever you want.',
       'The ring around the lock fills towards your next milestone: 1 week, then every month of the first year, then every year. On the day you reach one, the ring glows softly.',
+      'When a new block arrives, its number shows inside the ring for a few seconds and a short gold light runs once around it. Both only while Zecky is up to date; with Reduce Motion on, only the number shows.',
       'Tap that line for highlights of what you hold and your milestones. Each has its own name, from Locked at 1 week to Legend at 4 years. Tap the milestones to see the whole path.',
     ],
     more: [

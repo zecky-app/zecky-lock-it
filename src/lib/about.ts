@@ -9,7 +9,7 @@ const rn = Platform.constants.reactNativeVersion;
  * in the Xcode project by __tests__/version.test.ts (audit G2: without it,
  * builds of one version could not be told apart on the phone).
  */
-export const APP_BUILD = 24;
+export const APP_BUILD = 25;
 
 /** The Zecky engine release in this build; scripts/fetch-engine.sh installs it. */
 export const ENGINE_RELEASE = 'v4.0.0-zecky.3';

@@ -1,7 +1,7 @@
-import React from 'react';
-import { View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Line } from 'react-native-svg';
-import { useColors } from '../../theme';
+import { fonts, useColors } from '../../theme';
 
 interface Props {
   /** 0 to 1, towards the next milestone. */
@@ -9,7 +9,22 @@ interface Props {
   diameter?: number;
   /** The day a milestone is reached: a soft glow along the arc. */
   glow?: boolean;
+  /**
+   * Raise this for each new block: "BLOCK <height>" shows for a moment and,
+   * when `sweepLight` is on, a short gold light runs once around the ring.
+   * 0 shows nothing.
+   */
+  sweep?: number;
+  /** The block shown with the sweep. */
+  sweepHeight?: number;
+  /** Run the light (off with Reduce Motion: then only the number shows). */
+  sweepLight?: boolean;
 }
+
+const SWEEP_MS = 1200;
+// The light: a tail of a few arc pieces that brighten towards the head.
+const TAIL_DEG = 36;
+const TAIL_PARTS = 4;
 
 // Room around the ring for the glow of the tip.
 const PAD = 10;
@@ -22,8 +37,69 @@ export function MilestoneRing({
   progress,
   diameter = 300,
   glow = false,
+  sweep = 0,
+  sweepHeight = 0,
+  sweepLight = true,
 }: Props) {
   const colors = useColors();
+  // The sweep turns a separate layer with the native driver (transform and
+  // opacity only), so it stays smooth on older iPhones and never redraws
+  // the ring underneath.
+  const turn = useRef(new Animated.Value(0)).current;
+  const light = useRef(new Animated.Value(0)).current;
+  const label = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (sweep <= 0) return;
+    turn.setValue(0);
+    light.setValue(0);
+    // The number fades in, stays a few seconds, and fades out, as on the
+    // Mac; a newer block restarts it.
+    const number = Animated.sequence([
+      Animated.timing(label, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.delay(3300),
+      Animated.timing(label, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+    ]);
+    number.start();
+    if (!sweepLight) return () => number.stop();
+    const run = Animated.parallel([
+      Animated.timing(turn, {
+        toValue: 1,
+        duration: SWEEP_MS,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(light, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.delay(SWEEP_MS - 450),
+        Animated.timing(light, {
+          toValue: 0,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+    run.start();
+    return () => {
+      run.stop();
+      number.stop();
+    };
+  }, [sweep, sweepLight, turn, light, label]);
+  const rotate = turn.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
   const p = Math.max(0.004, Math.min(1, progress));
   const r = diameter / 2;
   const c = r + PAD;
@@ -118,6 +194,78 @@ export function MilestoneRing({
         <Circle cx={tip.x} cy={tip.y} r={4} fill={colors.gold} />
         {ticks}
       </Svg>
+      {sweep > 0 && sweepHeight > 0 && (
+        <Animated.View
+          style={[
+            styles.label,
+            { width: size, top: c - r + Math.round(diameter * 0.12) },
+            { opacity: label },
+          ]}
+        >
+          <Text style={[styles.labelText, { color: colors.gold }]}>
+            BLOCK {sweepHeight.toLocaleString('en-US')}
+          </Text>
+        </Animated.View>
+      )}
+      {sweep > 0 && sweepLight && (
+        <Animated.View
+          style={[
+            styles.sweep,
+            {
+              width: size,
+              height: size,
+              opacity: light,
+              transform: [{ rotate }],
+            },
+          ]}
+        >
+          <Svg width={size} height={size}>
+            {/* Drawn ending at the top; the layer turns it once around. */}
+            {Array.from({ length: TAIL_PARTS }, (_, i) => {
+              const part = TAIL_DEG / TAIL_PARTS;
+              const start = -90 - TAIL_DEG + i * part;
+              return (
+                <G key={i} rotation={start} origin={`${c}, ${c}`}>
+                  <Circle
+                    cx={c}
+                    cy={c}
+                    r={r}
+                    fill="none"
+                    stroke={colors.gold}
+                    strokeOpacity={0.15 + (0.55 * (i + 1)) / TAIL_PARTS}
+                    strokeWidth={3}
+                    strokeDasharray={[
+                      (circumference * part) / 360,
+                      circumference,
+                    ]}
+                  />
+                </G>
+              );
+            })}
+            <Circle
+              cx={c}
+              cy={c - r}
+              r={8}
+              fill={colors.gold}
+              fillOpacity={0.25}
+            />
+            <Circle cx={c} cy={c - r} r={3} fill={colors.gold} />
+          </Svg>
+        </Animated.View>
+      )}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  sweep: { position: 'absolute' },
+  // Inside the ring, under its top and above the shackle, like on the Mac.
+  label: { position: 'absolute', left: 0, alignItems: 'center' },
+  labelText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 10,
+    letterSpacing: 1.5,
+    opacity: 0.8,
+    fontVariant: ['tabular-nums'],
+  },
+});

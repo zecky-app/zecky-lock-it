@@ -2,6 +2,14 @@
 
 What changed in each version, in plain words. Newest first.
 
+## 0.0.19 (25), November 14, 2026
+- Home: when a new block arrives, "BLOCK 3,551,234" shows inside the ring
+  for a few seconds and one short gold light runs once around it (about
+  1.2 seconds), as on Lock it Mac and Windows. The milestone progress
+  underneath stays as it is. Only while Zecky is on screen and up to date;
+  with Reduce Motion on, only the number shows. No new requests:
+  it follows the block height the wallet already reports.
+
 ## 0.0.19 (24), November 12, 2026
 - Fewer traces of the build Mac inside the app: the C libraries (BoringSSL
   and others) no longer carry the builder's folder paths in their error

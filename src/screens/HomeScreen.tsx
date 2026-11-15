@@ -1,6 +1,7 @@
 import type { Transaction } from 'react-native-zcash';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   Animated,
   AppState,
   Pressable,
@@ -20,6 +21,7 @@ import {
   ZeckyLock,
 } from '../components/lock';
 import { finishTour, showTour, tourSeen, useTourShowing } from '../lib/tour';
+import { blockBeat } from '../lib/blockSweep';
 import type { Currency } from '../config';
 import { formatFiat, usePrices } from '../lib/price';
 import {
@@ -503,6 +505,39 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
   // Only heights reached while fully synced count (re-check R1).
   const keyRemoval = useSecurityKeys().removal;
   const syncedHeight = synced ? state.networkHeight : 0;
+
+  // The block sweep: for each new block the number shows for a moment and
+  // a gold light runs around the ring, only on screen and at the tip. With
+  // Reduce Motion only the number shows.
+  const [sweep, setSweep] = useState(0);
+  const [sweepLight, setSweepLight] = useState(true);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(setReduceMotion)
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged',
+      setReduceMotion,
+    );
+    return () => sub.remove();
+  }, []);
+  const lastHeight = useRef(0);
+  useEffect(() => {
+    const previous = lastHeight.current;
+    lastHeight.current = state.networkHeight;
+    const beat = blockBeat(previous, state.networkHeight, {
+      synced,
+      foreground: AppState.currentState === 'active',
+      reduceMotion,
+    });
+    if (beat.label) {
+      setSweepLight(beat.light);
+      setSweep(s => s + 1);
+    }
+    // Only a new height plays it; synced and Reduce Motion are read as they
+    // are at that moment, so their own changes never start a sweep.
+  }, [state.networkHeight]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (syncedHeight <= 0) return;
     noteSyncedHeight(syncedHeight).catch(() => {});
@@ -643,6 +678,9 @@ export function HomeScreen({ wallet, isNew, locked, onErased }: Props) {
             <MilestoneRing
               progress={milestone.progress}
               glow={milestone.reachedToday}
+              sweep={sweep}
+              sweepHeight={state.networkHeight}
+              sweepLight={sweepLight}
               diameter={Math.round(364 * heroScale)}
             />
           </View>
